@@ -1,0 +1,32 @@
+<Window x:Class="AngelBossKey.Next.App.HotkeyDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置热键" Width="420" Height="248" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="全局隐藏热键" FontSize="18" FontWeight="SemiBold" />
+            <TextBlock Text="请按下至少一个修饰键和一个普通按键" Margin="0,7,0,0"
+                       Foreground="{StaticResource SecondaryTextBrush}" />
+        </StackPanel>
+
+        <Border Grid.Row="1" Height="58" CornerRadius="6" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" VerticalAlignment="Center">
+            <TextBlock x:Name="GestureText" Text="等待输入…" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" FontSize="17" FontWeight="SemiBold" />
+        </Border>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Style="{StaticResource SecondaryButton}" Content="取消" Width="82" Margin="0,0,10,0"
+                    IsCancel="True" />
+            <Button x:Name="SaveButton" Style="{StaticResource PrimaryButton}" Content="保存" Width="82"
+                    IsEnabled="False" Click="Save_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

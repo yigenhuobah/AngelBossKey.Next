@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="AngelBossKey.Next.App/AngelBossKey.Next.App.csproj" />
+  <Project Path="AngelBossKey.Next.Core/AngelBossKey.Next.Core.csproj" />
+  <Project Path="AngelBossKey.Next.Tests/AngelBossKey.Next.Tests.csproj" />
+  <Project Path="AngelBossKey.Next.Win32/AngelBossKey.Next.Win32.csproj" />
+</Solution>
