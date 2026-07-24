@@ -5,6 +5,7 @@ using AngelBossKey.Next.Core.Abstractions;
 using AngelBossKey.Next.Core.Storage;
 using AngelBossKey.Next.Win32;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 
@@ -16,6 +17,8 @@ public partial class App : System.Windows.Application
     private GlobalHotkeyService? _hotkeyService;
     private WindowEventWatcher? _windowEventWatcher;
     private TrayIconService? _trayIcon;
+    private WindowStateMonitor? _windowStateMonitor;
+    private IDiagnosticLog? _diagnosticLog;
     private IWindowVisibilityController? _visibilityController;
     private MainWindowViewModel? _viewModel;
     private MainWindow? _mainWindow;
@@ -23,6 +26,7 @@ public partial class App : System.Windows.Application
     private bool _isExiting;
     private bool _servicesDisposed;
     private bool _activationPending;
+    private uint _taskbarCreatedMessage;
 
     public static App Instance => (App)Current;
     public bool IsExiting => _isExiting;
@@ -54,12 +58,14 @@ public partial class App : System.Windows.Application
         var dataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AngelBossKey.Next");
+        _diagnosticLog = new RollingDiagnosticLog(Path.Combine(dataDirectory, "logs"));
+        _diagnosticLog.Info("app.start", $"version=0.2.0; background={e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase)}");
         var settingsStore = new JsonSettingsStore(Path.Combine(dataDirectory, "settings.json"));
         var recoveryStore = new JsonRecoveryStore(Path.Combine(dataDirectory, "recovery.json"));
         var settings = await settingsStore.LoadAsync();
 
         var windowCatalog = new WindowCatalog();
-        _visibilityController = new WindowVisibilityController(windowCatalog, recoveryStore);
+        _visibilityController = new WindowVisibilityController(windowCatalog, recoveryStore, _diagnosticLog);
         var startupRegistration = new StartupRegistration();
         _hotkeyService = new GlobalHotkeyService();
         _viewModel = new MainWindowViewModel(
@@ -67,7 +73,8 @@ public partial class App : System.Windows.Application
             settingsStore,
             _visibilityController,
             startupRegistration,
-            _hotkeyService);
+            _hotkeyService,
+            _diagnosticLog);
 
         _mainWindow = new MainWindow(_viewModel, windowCatalog);
         MainWindow = _mainWindow;
@@ -75,6 +82,7 @@ public partial class App : System.Windows.Application
         var handle = new WindowInteropHelper(_mainWindow).EnsureHandle();
         _windowSource = HwndSource.FromHwnd(handle);
         _windowSource.AddHook(WindowProcedure);
+        _taskbarCreatedMessage = RegisterWindowMessageW("TaskbarCreated");
         _hotkeyService.AttachWindow(handle);
         _hotkeyService.Pressed += async (_, _) => await Dispatcher.InvokeAsync(ToggleVisibilityAsync);
         await _viewModel.InitializeHotkeyAsync();
@@ -82,8 +90,10 @@ public partial class App : System.Windows.Application
         var recovered = await _visibilityController.RecoverAsync();
         _viewModel.SetRecoveryResult(recovered);
 
-        _windowEventWatcher = new WindowEventWatcher(_visibilityController);
+        _windowEventWatcher = new WindowEventWatcher(_visibilityController, _diagnosticLog);
         _windowEventWatcher.Start();
+        _windowStateMonitor = new WindowStateMonitor(_visibilityController, _diagnosticLog);
+        _windowStateMonitor.Start();
 
         _trayIcon = new TrayIconService(
             () => Dispatcher.Invoke(ShowMainWindow),
@@ -185,6 +195,12 @@ public partial class App : System.Windows.Application
 
     private nint WindowProcedure(nint window, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (_taskbarCreatedMessage != 0 && message == _taskbarCreatedMessage)
+        {
+            _trayIcon?.RefreshAfterExplorerRestart();
+            _diagnosticLog?.Info("tray.recreated", "explorer-restart=true");
+        }
+
         _hotkeyService?.HandleMessage(message, wParam);
         return 0;
     }
@@ -197,10 +213,15 @@ public partial class App : System.Windows.Application
         }
 
         _servicesDisposed = true;
+        _diagnosticLog?.Info("app.stop", $"hidden={_visibilityController?.IsHidden == true}");
+        _windowStateMonitor?.Dispose();
         _trayIcon?.Dispose();
         _windowEventWatcher?.Dispose();
         _hotkeyService?.Dispose();
         _windowSource?.RemoveHook(WindowProcedure);
         _singleInstance?.Dispose();
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessageW(string message);
 }

@@ -6,12 +6,14 @@ namespace AngelBossKey.Next.Win32;
 
 public sealed class WindowVisibilityController(
     IWindowCatalog windowCatalog,
-    IRecoveryStore recoveryStore) : IWindowVisibilityController
+    IRecoveryStore recoveryStore,
+    IDiagnosticLog? diagnosticLog = null) : IWindowVisibilityController
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ProcessAccessInspector _accessInspector = new();
     private readonly List<HiddenWindowRecord> _hiddenWindows = [];
     private readonly HashSet<long> _restoreShowSuppressions = [];
+    private readonly IDiagnosticLog _log = diagnosticLog ?? NullDiagnosticLog.Instance;
     private IReadOnlyCollection<TargetRule> _activeTargets = [];
     private bool _isHidden;
 
@@ -106,12 +108,14 @@ public sealed class WindowVisibilityController(
             }
 
             StateChanged?.Invoke(this, EventArgs.Empty);
-            return new VisibilityOperationResult
+            var result = new VisibilityOperationResult
             {
                 ChangedCount = confirmedHidden,
                 SkippedElevatedCount = skippedElevated,
                 FailedCount = failed
             };
+            _log.Info("windows.hide", FormatResult(result));
+            return result;
         }
         finally
         {
@@ -140,6 +144,7 @@ public sealed class WindowVisibilityController(
             }
 
             StateChanged?.Invoke(this, EventArgs.Empty);
+            _log.Info("windows.restore", FormatResult(outcome.Result));
             return outcome.Result;
         }
         finally
@@ -169,7 +174,161 @@ public sealed class WindowVisibilityController(
             }
 
             StateChanged?.Invoke(this, EventArgs.Empty);
+            _log.Info("windows.recover", FormatResult(outcome.Result));
             return outcome.Result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<VisibilityOperationResult> UpdateTargetsAsync(
+        IReadOnlyCollection<TargetRule> targets,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            _activeTargets = targets.Where(target => target.Enabled).ToArray();
+            if (!IsHidden)
+            {
+                return new VisibilityOperationResult();
+            }
+
+            var restoreCandidates = new List<HiddenWindowRecord>();
+            foreach (var record in _hiddenWindows)
+            {
+                var pathRules = _activeTargets
+                    .Where(target => TargetRuleMatcher.MatchesPath(record.ExecutablePath, target))
+                    .ToArray();
+                if (pathRules.Length == 0)
+                {
+                    restoreCandidates.Add(record);
+                    continue;
+                }
+
+                var window = windowCatalog.TryGetWindow(record.Handle);
+                if (window is not null && !TargetRuleMatcher.Matches(window, pathRules))
+                {
+                    restoreCandidates.Add(record);
+                }
+            }
+
+            var restored = new VisibilityOperationResult();
+            if (restoreCandidates.Count > 0)
+            {
+                var candidateHandles = restoreCandidates.Select(record => record.Handle).ToHashSet();
+                var retained = _hiddenWindows
+                    .Where(record => !candidateHandles.Contains(record.Handle))
+                    .ToList();
+                var outcome = await RestoreRecordsAsync(restoreCandidates, cancellationToken);
+                retained.AddRange(outcome.Remaining);
+                _hiddenWindows.Clear();
+                _hiddenWindows.AddRange(retained);
+                restored = outcome.Result;
+            }
+
+            var hidden = await HideMatchingVisibleWindowsAsync(cancellationToken);
+
+            if (_hiddenWindows.Count == 0)
+            {
+                await recoveryStore.ClearAsync(cancellationToken);
+                if (_activeTargets.Count == 0)
+                {
+                    Volatile.Write(ref _isHidden, false);
+                }
+            }
+            else
+            {
+                await SaveJournalAsync(cancellationToken);
+            }
+
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            var result = restored with
+            {
+                FailedCount = restored.FailedCount + hidden.FailedCount,
+                SkippedElevatedCount = hidden.SkippedElevatedCount
+            };
+            _log.Info(
+                "rules.reconcile",
+                $"restored={restored.ChangedCount}; hidden={hidden.ChangedCount}; failed={result.FailedCount}; active={_activeTargets.Count}");
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<VisibilityOperationResult> SelfCheckAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!IsHidden)
+            {
+                return new VisibilityOperationResult();
+            }
+
+            var corrected = 0;
+            var failed = 0;
+            var removed = 0;
+            foreach (var record in _hiddenWindows.ToArray())
+            {
+                var window = (nint)record.Handle;
+                var identity = GetWindowIdentity(record, window);
+                if (identity == WindowIdentityStatus.Different)
+                {
+                    _hiddenWindows.Remove(record);
+                    removed++;
+                    continue;
+                }
+                if (identity == WindowIdentityStatus.Unknown)
+                {
+                    failed++;
+                    continue;
+                }
+                if (!NativeMethods.IsWindowVisible(window))
+                {
+                    continue;
+                }
+
+                _ = NativeMethods.ShowWindowAsync(window, NativeMethods.SwHide);
+                if (await WaitForVisibilityAsync(window, visible: false, cancellationToken))
+                {
+                    corrected++;
+                }
+                else
+                {
+                    failed++;
+                }
+            }
+
+            if (removed > 0)
+            {
+                if (_hiddenWindows.Count == 0)
+                {
+                    await recoveryStore.ClearAsync(cancellationToken);
+                    if (_activeTargets.Count == 0)
+                    {
+                        Volatile.Write(ref _isHidden, false);
+                        StateChanged?.Invoke(this, EventArgs.Empty);
+                    }
+                }
+                else
+                {
+                    await SaveJournalAsync(cancellationToken);
+                }
+            }
+
+            var result = new VisibilityOperationResult { ChangedCount = corrected, FailedCount = failed };
+            if (corrected > 0 || failed > 0 || removed > 0)
+            {
+                _log.Warning("windows.self-check", $"corrected={corrected}; failed={failed}; removed={removed}");
+            }
+
+            return result;
         }
         finally
         {
@@ -269,13 +428,96 @@ public sealed class WindowVisibilityController(
             var removed = _hiddenWindows.RemoveAll(record => record.Handle == handle);
             if (removed > 0)
             {
-                await SaveJournalAsync(cancellationToken);
+                if (_hiddenWindows.Count == 0)
+                {
+                    await recoveryStore.ClearAsync(cancellationToken);
+                    if (_activeTargets.Count == 0)
+                    {
+                        Volatile.Write(ref _isHidden, false);
+                        StateChanged?.Invoke(this, EventArgs.Empty);
+                    }
+                }
+                else
+                {
+                    await SaveJournalAsync(cancellationToken);
+                }
             }
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private async Task<VisibilityOperationResult> HideMatchingVisibleWindowsAsync(
+        CancellationToken cancellationToken)
+    {
+        var existingHandles = _hiddenWindows.Select(record => record.Handle).ToHashSet();
+        var records = new List<HiddenWindowRecord>();
+        var skippedElevated = 0;
+        var failed = 0;
+        foreach (var window in windowCatalog.GetVisibleWindows())
+        {
+            if (existingHandles.Contains(window.Handle) ||
+                !TargetRuleMatcher.Matches(window, _activeTargets))
+            {
+                continue;
+            }
+            if (_accessInspector.CannotSafelyAccess(window.ProcessId))
+            {
+                skippedElevated++;
+                continue;
+            }
+
+            var record = Capture(window);
+            if (record is null)
+            {
+                failed++;
+                continue;
+            }
+
+            records.Add(record);
+            _hiddenWindows.Add(record);
+        }
+
+        if (records.Count == 0)
+        {
+            return new VisibilityOperationResult
+            {
+                SkippedElevatedCount = skippedElevated,
+                FailedCount = failed
+            };
+        }
+
+        await SaveJournalAsync(cancellationToken);
+        var confirmed = 0;
+        foreach (var record in records)
+        {
+            if (GetWindowIdentity(record, (nint)record.Handle) != WindowIdentityStatus.Same ||
+                !NativeMethods.IsWindowVisible((nint)record.Handle))
+            {
+                _hiddenWindows.Remove(record);
+                failed++;
+                continue;
+            }
+
+            _ = NativeMethods.ShowWindowAsync((nint)record.Handle, NativeMethods.SwHide);
+            if (await WaitForVisibilityAsync((nint)record.Handle, visible: false, cancellationToken))
+            {
+                confirmed++;
+            }
+            else
+            {
+                failed++;
+            }
+        }
+
+        return new VisibilityOperationResult
+        {
+            ChangedCount = confirmed,
+            SkippedElevatedCount = skippedElevated,
+            FailedCount = failed
+        };
     }
 
     private HiddenWindowRecord? Capture(WindowInfo window)
@@ -366,6 +608,7 @@ public sealed class WindowVisibilityController(
                     Bottom = record.Placement.Bottom
                 }
             };
+            ClampToVisibleWorkArea(ref placement);
 
             _restoreShowSuppressions.Add(record.Handle);
             if (!NativeMethods.SetWindowPlacement(window, in placement))
@@ -465,6 +708,43 @@ public sealed class WindowVisibilityController(
 
         return NativeMethods.IsWindow(window) && NativeMethods.IsWindowVisible(window) == visible;
     }
+
+    private static void ClampToVisibleWorkArea(ref NativeMethods.WindowPlacement placement)
+    {
+        var rectangle = placement.NormalPosition;
+        var width = Math.Max(100, rectangle.Right - rectangle.Left);
+        var height = Math.Max(80, rectangle.Bottom - rectangle.Top);
+        var monitor = NativeMethods.MonitorFromRect(in rectangle, NativeMethods.MonitorDefaultToNearest);
+        if (monitor == 0)
+        {
+            return;
+        }
+
+        var monitorInfo = new NativeMethods.MonitorInfo
+        {
+            Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>()
+        };
+        if (!NativeMethods.GetMonitorInfoW(monitor, ref monitorInfo))
+        {
+            return;
+        }
+
+        var work = monitorInfo.WorkArea;
+        width = Math.Min(width, Math.Max(100, work.Right - work.Left));
+        height = Math.Min(height, Math.Max(80, work.Bottom - work.Top));
+        var left = Math.Clamp(rectangle.Left, work.Left, Math.Max(work.Left, work.Right - width));
+        var top = Math.Clamp(rectangle.Top, work.Top, Math.Max(work.Top, work.Bottom - height));
+        placement.NormalPosition = new NativeMethods.Rect
+        {
+            Left = left,
+            Top = top,
+            Right = left + width,
+            Bottom = top + height
+        };
+    }
+
+    private static string FormatResult(VisibilityOperationResult result) =>
+        $"changed={result.ChangedCount}; failed={result.FailedCount}; elevated={result.SkippedElevatedCount}";
 
     private sealed record RestoreOutcome(
         VisibilityOperationResult Result,

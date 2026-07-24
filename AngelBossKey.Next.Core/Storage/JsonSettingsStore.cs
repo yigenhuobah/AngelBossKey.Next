@@ -13,18 +13,24 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
         try
         {
             var settings = await AtomicJsonStore.ReadAsync<AppSettings>(path, cancellationToken);
-            if (settings is not { SchemaVersion: 1 })
+            if (settings is null || settings.SchemaVersion is < 1 or > 2)
             {
                 return new AppSettings();
             }
 
             return settings with
             {
+                SchemaVersion = 2,
                 Hotkey = settings.Hotkey ?? new HotkeyGesture(),
                 Targets = (settings.Targets ?? [])
                     .Where(target => target is not null &&
                         !string.IsNullOrWhiteSpace(target.DisplayName) &&
                         !string.IsNullOrWhiteSpace(target.ExecutablePath))
+                    .Select(target => target with
+                    {
+                        TitleIncludes = target.TitleIncludes?.Trim() ?? string.Empty,
+                        TitleExcludes = target.TitleExcludes?.Trim() ?? string.Empty
+                    })
                     .ToList()
             };
         }

@@ -32,8 +32,19 @@ public interface IWindowVisibilityController
 
     Task<VisibilityOperationResult> RestoreAsync(CancellationToken cancellationToken = default);
     Task<VisibilityOperationResult> RecoverAsync(CancellationToken cancellationToken = default);
+    Task<VisibilityOperationResult> UpdateTargetsAsync(
+        IReadOnlyCollection<TargetRule> targets,
+        CancellationToken cancellationToken = default);
+    Task<VisibilityOperationResult> SelfCheckAsync(CancellationToken cancellationToken = default);
     Task<bool> TryHideNewWindowAsync(long handle, CancellationToken cancellationToken = default);
     Task ForgetDestroyedWindowAsync(long handle, CancellationToken cancellationToken = default);
+}
+
+public interface IDiagnosticLog
+{
+    void Info(string eventName, string details);
+    void Warning(string eventName, string details);
+    void Error(string eventName, Exception exception);
 }
 
 public interface IStartupRegistration

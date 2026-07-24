@@ -1,18 +1,23 @@
 using AngelBossKey.Next.Core.Abstractions;
+using AngelBossKey.Next.Core.Services;
 
 namespace AngelBossKey.Next.Win32;
 
 public sealed class WindowEventWatcher : IDisposable
 {
     private readonly IWindowVisibilityController _visibilityController;
+    private readonly IDiagnosticLog _diagnosticLog;
     private readonly NativeMethods.WinEventProc _callback;
     private readonly object _eventSync = new();
     private nint _hook;
     private Task _eventTail = Task.CompletedTask;
 
-    public WindowEventWatcher(IWindowVisibilityController visibilityController)
+    public WindowEventWatcher(
+        IWindowVisibilityController visibilityController,
+        IDiagnosticLog? diagnosticLog = null)
     {
         _visibilityController = visibilityController;
+        _diagnosticLog = diagnosticLog ?? NullDiagnosticLog.Instance;
         _callback = OnWindowEvent;
     }
 
@@ -31,6 +36,10 @@ public sealed class WindowEventWatcher : IDisposable
             0,
             0,
             NativeMethods.WineventOutOfContext);
+        if (_hook == 0)
+        {
+            _diagnosticLog.Warning("windows.hook", "registration-failed=true");
+        }
     }
 
     public void Dispose()
@@ -85,9 +94,9 @@ public sealed class WindowEventWatcher : IDisposable
                 await _visibilityController.TryHideNewWindowAsync(window);
             }
         }
-        catch
+        catch (Exception exception)
         {
-            // A transient window can disappear before it is inspected.
+            _diagnosticLog.Error("windows.event", exception);
         }
     }
 }

@@ -135,10 +135,73 @@ public sealed class WindowVisibilityIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task UpdatingRulesWhileHidden_RestoresOnlyTheExcludedWindow()
+    {
+        using var alphaHost = await TestWindowHost.StartAsync("Alpha workspace");
+        using var betaHost = await TestWindowHost.StartAsync("Beta workspace");
+        var process = Process.GetCurrentProcess();
+        var alpha = CreateWindow(alphaHost, process, "Alpha workspace");
+        var beta = CreateWindow(betaHost, process, "Beta workspace");
+        var directory = Path.Combine(Path.GetTempPath(), "AngelBossKey.Next.Tests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var controller = new WindowVisibilityController(
+                new MultipleWindowCatalog([alpha, beta]),
+                new JsonRecoveryStore(Path.Combine(directory, "recovery.json")));
+            var alphaRule = new TargetRule
+            {
+                DisplayName = "Test host",
+                ExecutablePath = Environment.ProcessPath!,
+                TitleIncludes = "Alpha"
+            };
+            var betaRule = alphaRule with { Id = Guid.NewGuid(), TitleIncludes = "Beta" };
+
+            var hidden = await controller.HideAsync([alphaRule, betaRule]);
+            Assert.Equal(2, hidden.ChangedCount);
+
+            var reconciled = await controller.UpdateTargetsAsync([alphaRule]);
+
+            Assert.Equal(1, reconciled.ChangedCount);
+            Assert.False(NativeMethods.IsWindowVisible((nint)alpha.Handle));
+            Assert.True(NativeMethods.IsWindowVisible((nint)beta.Handle));
+
+            var restored = await controller.RestoreAsync();
+            Assert.Equal(1, restored.ChangedCount);
+            Assert.True(NativeMethods.IsWindowVisible((nint)alpha.Handle));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    private static WindowInfo CreateWindow(TestWindowHost host, Process process, string title) => new()
+    {
+        Handle = host.Handle,
+        ProcessId = process.Id,
+        Title = title,
+        ProcessName = process.ProcessName,
+        DisplayName = "Test host",
+        ExecutablePath = Environment.ProcessPath!
+    };
+
     private sealed class FixedWindowCatalog(WindowInfo window) : IWindowCatalog
     {
         public IReadOnlyList<WindowInfo> GetVisibleWindows() => [window];
         public WindowInfo? TryGetWindow(long handle) => handle == window.Handle ? window : null;
+    }
+
+    private sealed class MultipleWindowCatalog(IReadOnlyList<WindowInfo> windows) : IWindowCatalog
+    {
+        public IReadOnlyList<WindowInfo> GetVisibleWindows() =>
+            windows.Where(window => NativeMethods.IsWindowVisible((nint)window.Handle)).ToArray();
+
+        public WindowInfo? TryGetWindow(long handle) => windows.FirstOrDefault(window => window.Handle == handle);
     }
 
     private sealed class TestWindowHost : IDisposable
@@ -159,7 +222,7 @@ public sealed class WindowVisibilityIntegrationTests
 
         public void Invoke(Action action) => _form.Invoke(action);
 
-        public static async Task<TestWindowHost> StartAsync()
+        public static async Task<TestWindowHost> StartAsync(string title = "AngelBossKey integration window")
         {
             var ready = new TaskCompletionSource<(Forms.Form Form, nint Handle)>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -167,7 +230,7 @@ public sealed class WindowVisibilityIntegrationTests
             {
                 var form = new Forms.Form
                 {
-                    Text = "AngelBossKey integration window",
+                    Text = title,
                     Width = 480,
                     Height = 320,
                     StartPosition = Forms.FormStartPosition.Manual,

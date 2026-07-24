@@ -17,6 +17,7 @@ internal static partial class NativeMethods
     internal const uint ModNoRepeat = 0x4000;
     internal const int SwHide = 0;
     internal const int SwShowNormal = 1;
+    internal const uint MonitorDefaultToNearest = 2;
 
     internal delegate bool EnumWindowsProc(nint window, nint parameter);
     internal delegate void WinEventProc(
@@ -53,6 +54,15 @@ internal static partial class NativeMethods
         internal Point MinPosition;
         internal Point MaxPosition;
         internal Rect NormalPosition;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MonitorInfo
+    {
+        internal uint Size;
+        internal Rect Monitor;
+        internal Rect WorkArea;
+        internal uint Flags;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -103,6 +113,13 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetForegroundWindow(nint window);
+
+    [LibraryImport("user32.dll")]
+    internal static partial nint MonitorFromRect(in Rect rectangle, uint flags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetMonitorInfoW(nint monitor, ref MonitorInfo monitorInfo);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

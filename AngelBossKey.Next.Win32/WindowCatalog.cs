@@ -14,7 +14,7 @@ public sealed class WindowCatalog : IWindowCatalog
         var windows = new List<WindowInfo>();
         NativeMethods.EnumWindows((window, _) =>
         {
-            var candidate = TryGetWindowCore(window);
+            var candidate = TryGetWindowCore(window, requireVisible: true);
             if (candidate is not null &&
                 candidate.ProcessId != _currentProcessId)
             {
@@ -30,13 +30,13 @@ public sealed class WindowCatalog : IWindowCatalog
             .ToList();
     }
 
-    public WindowInfo? TryGetWindow(long handle) => TryGetWindowCore((nint)handle);
+    public WindowInfo? TryGetWindow(long handle) => TryGetWindowCore((nint)handle, requireVisible: false);
 
-    private WindowInfo? TryGetWindowCore(nint window)
+    private WindowInfo? TryGetWindowCore(nint window, bool requireVisible)
     {
         if (window == 0 ||
             !NativeMethods.IsWindow(window) ||
-            !NativeMethods.IsWindowVisible(window) ||
+            (requireVisible && !NativeMethods.IsWindowVisible(window)) ||
             NativeMethods.GetAncestor(window, NativeMethods.GaRoot) != window ||
             IsCloaked(window))
         {

@@ -43,6 +43,12 @@ public sealed class TrayIconService : IDisposable
         _toggleItem.Text = isHidden ? "恢复目标" : "隐藏目标";
     }
 
+    public void RefreshAfterExplorerRestart()
+    {
+        _notifyIcon.Visible = false;
+        _notifyIcon.Visible = true;
+    }
+
     public void Dispose()
     {
         _notifyIcon.Visible = false;

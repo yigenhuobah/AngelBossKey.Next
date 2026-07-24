@@ -29,6 +29,25 @@ public static class TargetRuleMatcher
             string.Equals(
                 NormalizePath(target.ExecutablePath),
                 windowPath,
-                StringComparison.OrdinalIgnoreCase));
+                StringComparison.OrdinalIgnoreCase) &&
+            MatchesTitle(window.Title, target));
+    }
+
+    public static bool MatchesPath(string executablePath, TargetRule target) =>
+        string.Equals(
+            NormalizePath(target.ExecutablePath),
+            NormalizePath(executablePath),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool MatchesTitle(string title, TargetRule target)
+    {
+        if (!string.IsNullOrWhiteSpace(target.TitleIncludes) &&
+            !title.Contains(target.TitleIncludes.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(target.TitleExcludes) ||
+            !title.Contains(target.TitleExcludes.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 }

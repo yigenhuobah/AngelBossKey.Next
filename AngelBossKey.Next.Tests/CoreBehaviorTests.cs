@@ -46,6 +46,25 @@ public sealed class CoreBehaviorTests : IDisposable
     }
 
     [Fact]
+    public void RuleMatcher_AppliesOptionalTitleIncludeAndExcludeConditions()
+    {
+        var window = CreateWindowInfo(@"C:\Apps\Editor\editor.exe") with
+        {
+            Title = "Quarterly report - Private"
+        };
+        var includeRule = new TargetRule
+        {
+            DisplayName = "Editor",
+            ExecutablePath = window.ExecutablePath,
+            TitleIncludes = "quarterly"
+        };
+        var excludeRule = includeRule with { TitleExcludes = "private" };
+
+        Assert.True(TargetRuleMatcher.Matches(window, [includeRule]));
+        Assert.False(TargetRuleMatcher.Matches(window, [excludeRule]));
+    }
+
+    [Fact]
     public async Task SettingsStore_RoundTripsHotkeyTargetsAndPreferences()
     {
         var path = Path.Combine(_directory, "settings.json");
@@ -64,7 +83,9 @@ public sealed class CoreBehaviorTests : IDisposable
                 new TargetRule
                 {
                     DisplayName = "Editor",
-                    ExecutablePath = @"C:\Apps\editor.exe"
+                    ExecutablePath = @"C:\Apps\editor.exe",
+                    TitleIncludes = "Document",
+                    TitleExcludes = "Private"
                 }
             ]
         };
@@ -89,7 +110,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(1, loaded.SchemaVersion);
+        Assert.Equal(2, loaded.SchemaVersion);
         Assert.False(loaded.Hotkey.IsConfigured);
         Assert.Empty(loaded.Targets);
     }
@@ -105,6 +126,23 @@ public sealed class CoreBehaviorTests : IDisposable
 
         Assert.NotNull(loaded.Hotkey);
         Assert.Empty(loaded.Targets);
+    }
+
+    [Fact]
+    public async Task SettingsStore_MigratesVersionOneRulesToVersionTwo()
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "settings.json");
+        await File.WriteAllTextAsync(
+            path,
+            """{"schemaVersion":1,"targets":[{"executablePath":"C:\\Apps\\editor.exe","displayName":"Editor","enabled":true}]}""");
+
+        var loaded = await new JsonSettingsStore(path).LoadAsync();
+
+        Assert.Equal(2, loaded.SchemaVersion);
+        var rule = Assert.Single(loaded.Targets);
+        Assert.Equal(string.Empty, rule.TitleIncludes);
+        Assert.Equal(string.Empty, rule.TitleExcludes);
     }
 
     [Fact]

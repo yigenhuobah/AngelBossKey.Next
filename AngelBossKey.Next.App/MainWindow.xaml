@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="天使老板键 Next"
-        Width="920" Height="640" MinWidth="720" MinHeight="500"
+        Width="1080" Height="700" MinWidth="840" MinHeight="560"
         WindowStartupLocation="CenterScreen">
     <Grid Background="{StaticResource BackgroundBrush}">
         <Grid.RowDefinitions>
@@ -110,9 +110,9 @@
             <DataGrid ItemsSource="{Binding Targets}" AutoGenerateColumns="False" HeadersVisibility="Column"
                       GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource BorderBrush}"
                       BorderThickness="0" Background="Transparent" RowBackground="Transparent"
-                      AlternatingRowBackground="#F8FAFA" RowHeight="62" CanUserAddRows="False"
+                      AlternatingRowBackground="#F8FAFA" RowHeight="86" CanUserAddRows="False"
                       CanUserDeleteRows="False" CanUserResizeRows="False" SelectionMode="Single"
-                      IsReadOnly="True">
+                      IsReadOnly="False" CanUserSortColumns="False">
                 <DataGrid.Resources>
                     <Style TargetType="DataGridColumnHeader">
                         <Setter Property="Height" Value="38" />
@@ -129,7 +129,7 @@
                     </Style>
                 </DataGrid.Resources>
                 <DataGrid.Columns>
-                    <DataGridTemplateColumn Header="启用" Width="64">
+                    <DataGridTemplateColumn Header="启用" Width="54">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -137,26 +137,85 @@
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTemplateColumn Header="程序" Width="220">
+                    <DataGridTemplateColumn Header="程序" Width="180">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <Image Source="{Binding Icon}" Width="30" Height="30" Margin="0,0,12,0" />
-                                    <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center"
-                                               FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   MaxWidth="118" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding StatusText}" FontSize="11" Margin="0,4,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPathValid}" Value="False">
+                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding TemporarilyExcluded}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
                                 </StackPanel>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="可执行文件" Binding="{Binding ExecutablePath}" Width="*" />
-                    <DataGridTemplateColumn Width="54">
+                    <DataGridTemplateColumn Header="标题条件" Width="230">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="移除目标"
-                                        AutomationProperties.Name="移除目标"
-                                        Foreground="{StaticResource DangerBrush}"
-                                        Command="{Binding DataContext.RemoveTargetCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                        CommandParameter="{Binding}" />
+                                <Grid VerticalAlignment="Center">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="42" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="包含" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"
+                                               VerticalAlignment="Center" />
+                                    <TextBox Grid.Column="1" Text="{Binding TitleIncludes, UpdateSourceTrigger=LostFocus}"
+                                             ToolTip="留空时匹配该程序的全部窗口" Padding="6,3" />
+                                    <TextBlock Grid.Row="1" Text="排除" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"
+                                               VerticalAlignment="Center" Margin="0,5,0,0" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding TitleExcludes, UpdateSourceTrigger=LostFocus}"
+                                             ToolTip="标题包含该文字的窗口不隐藏" Padding="6,3" Margin="0,5,0,0" />
+                                </Grid>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="可执行文件" Binding="{Binding ExecutablePath}" Width="*" IsReadOnly="True" />
+                    <DataGridTemplateColumn Header="临时排除" Width="72">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding TemporarilyExcluded, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          HorizontalAlignment="Center" ToolTip="仅本次运行不参与隐藏" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Width="116">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Style="{StaticResource IconButton}" Content="&#xE74A;" ToolTip="上移"
+                                            AutomationProperties.Name="上移规则"
+                                            Command="{Binding DataContext.MoveTargetUpCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Style="{StaticResource IconButton}" Content="&#xE74B;" ToolTip="下移" Margin="4,0"
+                                            AutomationProperties.Name="下移规则"
+                                            Command="{Binding DataContext.MoveTargetDownCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="移除目标"
+                                            AutomationProperties.Name="移除目标"
+                                            Foreground="{StaticResource DangerBrush}"
+                                            Command="{Binding DataContext.RemoveTargetCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                            CommandParameter="{Binding}" />
+                                </StackPanel>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
@@ -170,12 +229,16 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{Binding Message}" Margin="24,0" VerticalAlignment="Center"
                        Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
-            <CheckBox Grid.Column="1" Content="开机启动" IsChecked="{Binding LaunchAtLogin}"
+            <Button Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE838;"
+                    ToolTip="打开诊断日志目录" AutomationProperties.Name="打开诊断日志目录"
+                    Click="OpenLogs_Click" Margin="0,0,16,0" />
+            <CheckBox Grid.Column="2" Content="开机启动" IsChecked="{Binding LaunchAtLogin}"
                       Margin="16,0,24,0" />
-            <CheckBox Grid.Column="2" Content="关闭到托盘" IsChecked="{Binding CloseToTray}"
+            <CheckBox Grid.Column="3" Content="关闭到托盘" IsChecked="{Binding CloseToTray}"
                       Margin="0,0,24,0" />
         </Grid>
     </Grid>

@@ -16,8 +16,10 @@ public sealed class MainWindowViewModel : ObservableObject
     private readonly IWindowVisibilityController _visibilityController;
     private readonly IStartupRegistration _startupRegistration;
     private readonly GlobalHotkeyService _hotkeyService;
+    private readonly IDiagnosticLog _diagnosticLog;
     private readonly object _settingsSaveSync = new();
     private readonly SemaphoreSlim _hotkeyChangeGate = new(1, 1);
+    private readonly SemaphoreSlim _ruleChangeGate = new(1, 1);
     private Task _settingsSaveTail = Task.CompletedTask;
     private AppSettings _settings;
     private string _message = "添加目标程序并设置热键后即可启用。";
@@ -30,13 +32,15 @@ public sealed class MainWindowViewModel : ObservableObject
         ISettingsStore settingsStore,
         IWindowVisibilityController visibilityController,
         IStartupRegistration startupRegistration,
-        GlobalHotkeyService hotkeyService)
+        GlobalHotkeyService hotkeyService,
+        IDiagnosticLog? diagnosticLog = null)
     {
         _settings = settings;
         _settingsStore = settingsStore;
         _visibilityController = visibilityController;
         _startupRegistration = startupRegistration;
         _hotkeyService = hotkeyService;
+        _diagnosticLog = diagnosticLog ?? NullDiagnosticLog.Instance;
         _launchAtLogin = settings.LaunchAtLogin;
         _closeToTray = settings.CloseToTray;
 
@@ -46,23 +50,36 @@ public sealed class MainWindowViewModel : ObservableObject
         }
 
         RemoveTargetCommand = new RelayCommand(RemoveTarget);
+        MoveTargetUpCommand = new RelayCommand(parameter => MoveTarget(parameter, -1));
+        MoveTargetDownCommand = new RelayCommand(parameter => MoveTarget(parameter, 1));
         ToggleVisibilityCommand = new RelayCommand(_ => _ = ToggleVisibilityAsync(), _ => CanToggle);
         _visibilityController.StateChanged += OnVisibilityStateChanged;
     }
 
     public ObservableCollection<TargetRowViewModel> Targets { get; } = [];
     public ICommand RemoveTargetCommand { get; }
+    public ICommand MoveTargetUpCommand { get; }
+    public ICommand MoveTargetDownCommand { get; }
     public RelayCommand ToggleVisibilityCommand { get; }
 
     public bool IsHidden => _visibilityController.IsHidden;
     public bool IsHotkeyConfigured => _settings.Hotkey.IsConfigured;
     public bool CanToggle => !_isBusy &&
-        (IsHidden || (IsHotkeyConfigured && Targets.Any(target => target.Enabled)));
+        (IsHidden || (IsHotkeyConfigured && Targets.Any(target => target.EffectiveEnabled)));
     public string HotkeyText => HotkeyFormatter.Format(_settings.Hotkey);
     public string StatusTitle => IsHidden ? "目标已隐藏" : "保护就绪";
     public string StatusDetail => IsHidden ? "再次触发热键可恢复" : "目标窗口保持正常显示";
     public string ToggleText => IsHidden ? "恢复目标" : "隐藏目标";
-    public string TargetCountText => $"{Targets.Count} 个目标程序";
+    public string TargetCountText
+    {
+        get
+        {
+            var invalid = Targets.Count(target => !target.IsPathValid);
+            return invalid == 0
+                ? $"{Targets.Count} 个目标程序"
+                : $"{Targets.Count} 个目标程序 · {invalid} 个路径失效";
+        }
+    }
     public string Message
     {
         get => _message;
@@ -215,6 +232,11 @@ public sealed class MainWindowViewModel : ObservableObject
             try
             {
                 await PersistTargetsAsync();
+                if (IsHidden)
+                {
+                    await _visibilityController.UpdateTargetsAsync(
+                        Targets.Select(target => target.ToEffectiveModel()).ToArray());
+                }
                 Message = $"已添加 {addedRows.Count} 个目标程序。";
             }
             catch (Exception exception)
@@ -241,9 +263,11 @@ public sealed class MainWindowViewModel : ObservableObject
             return new VisibilityOperationResult();
         }
 
-        if (!IsHidden && (!IsHotkeyConfigured || !Targets.Any(target => target.Enabled)))
+        if (!IsHidden && (!IsHotkeyConfigured || !Targets.Any(target => target.EffectiveEnabled)))
         {
-            Message = !IsHotkeyConfigured ? "请先设置热键。" : "请至少启用一个目标程序。";
+            Message = !IsHotkeyConfigured
+                ? "请先设置热键。"
+                : "没有可用的启用规则，请检查临时排除和程序路径。";
             return new VisibilityOperationResult();
         }
 
@@ -254,13 +278,14 @@ public sealed class MainWindowViewModel : ObservableObject
             var restoring = IsHidden;
             var result = restoring
                 ? await _visibilityController.RestoreAsync()
-                : await _visibilityController.HideAsync(Targets.Select(target => target.ToModel()).ToArray());
+                : await _visibilityController.HideAsync(Targets.Select(target => target.ToEffectiveModel()).ToArray());
 
             Message = BuildOperationMessage(result, restoring);
             return result;
         }
         catch (Exception exception)
         {
+            _diagnosticLog.Error("windows.operation", exception);
             Message = $"操作失败：{exception.Message}";
             return new VisibilityOperationResult { FailedCount = 1 };
         }
@@ -297,6 +322,7 @@ public sealed class MainWindowViewModel : ObservableObject
         }
         catch (Exception exception)
         {
+            _diagnosticLog.Error("settings.save", exception);
             Message = $"保存设置失败：{exception.Message}";
         }
     }
@@ -351,15 +377,36 @@ public sealed class MainWindowViewModel : ObservableObject
 
         target.PropertyChanged -= OnTargetPropertyChanged;
         Targets.Remove(target);
-        _ = PersistTargetsAndReportAsync($"已移除 {target.DisplayName}。");
+        _ = ApplyRuleChangesAsync($"已移除 {target.DisplayName}。");
         RefreshTargetState();
+    }
+
+    private void MoveTarget(object? parameter, int offset)
+    {
+        if (parameter is not TargetRowViewModel target)
+        {
+            return;
+        }
+
+        var oldIndex = Targets.IndexOf(target);
+        var newIndex = oldIndex + offset;
+        if (oldIndex < 0 || newIndex < 0 || newIndex >= Targets.Count)
+        {
+            return;
+        }
+
+        Targets.Move(oldIndex, newIndex);
+        _ = ApplyRuleChangesAsync("规则顺序已更新。");
     }
 
     private void OnTargetPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TargetRowViewModel.Enabled))
+        if (e.PropertyName is nameof(TargetRowViewModel.Enabled) or
+            nameof(TargetRowViewModel.TemporarilyExcluded) or
+            nameof(TargetRowViewModel.TitleIncludes) or
+            nameof(TargetRowViewModel.TitleExcludes))
         {
-            _ = PersistTargetsAndReportAsync();
+            _ = ApplyRuleChangesAsync();
             RefreshCommandState();
         }
     }
@@ -392,19 +439,33 @@ public sealed class MainWindowViewModel : ObservableObject
         await QueueSettingsSaveAsync();
     }
 
-    private async Task PersistTargetsAndReportAsync(string? successMessage = null)
+    private async Task ApplyRuleChangesAsync(string? successMessage = null)
     {
+        await _ruleChangeGate.WaitAsync();
         try
         {
             await PersistTargetsAsync();
+            var result = await _visibilityController.UpdateTargetsAsync(
+                Targets.Select(target => target.ToEffectiveModel()).ToArray());
             if (successMessage is not null)
             {
                 Message = successMessage;
             }
+            else if (result.ChangedCount > 0 || result.FailedCount > 0)
+            {
+                Message = result.FailedCount > 0
+                    ? $"已按规则恢复 {result.ChangedCount} 个窗口，{result.FailedCount} 个仍待恢复。"
+                    : $"已按规则恢复 {result.ChangedCount} 个窗口。";
+            }
         }
         catch (Exception exception)
         {
+            _diagnosticLog.Error("rules.save", exception);
             Message = $"保存目标设置失败：{exception.Message}";
+        }
+        finally
+        {
+            _ruleChangeGate.Release();
         }
     }
 

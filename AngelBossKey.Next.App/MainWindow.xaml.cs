@@ -1,6 +1,8 @@
 using AngelBossKey.Next.App.ViewModels;
 using AngelBossKey.Next.Core.Abstractions;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 
 namespace AngelBossKey.Next.App;
@@ -40,5 +42,15 @@ public partial class MainWindow : Window
         {
             await _viewModel.SetHotkeyAsync(dialog.Gesture);
         }
+    }
+
+    private void OpenLogs_Click(object sender, RoutedEventArgs e)
+    {
+        var directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AngelBossKey.Next",
+            "logs");
+        Directory.CreateDirectory(directory);
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{directory}\"") { UseShellExecute = true });
     }
 }
