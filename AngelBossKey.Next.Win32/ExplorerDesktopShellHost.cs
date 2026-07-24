@@ -18,6 +18,7 @@ internal sealed class ExplorerDesktopShellHost(
     private readonly IDiagnosticLog _log = diagnosticLog ?? NullDiagnosticLog.Instance;
     private readonly string _explorerPath = explorerPath ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+    private nint _jobHandle;
     private nint _processHandle;
     private uint _processId;
     private CancellationTokenSource? _monitorShutdown;
@@ -132,6 +133,8 @@ internal sealed class ExplorerDesktopShellHost(
             return false;
         }
 
+        if (!EnsureJob(out error)) return false;
+
         var startup = new NativeMethods.StartupInfo
         {
             Size = (uint)Marshal.SizeOf<NativeMethods.StartupInfo>(),
@@ -144,21 +147,74 @@ internal sealed class ExplorerDesktopShellHost(
                 0,
                 0,
                 false,
-                NativeMethods.CreateUnicodeEnvironment,
+                NativeMethods.CreateUnicodeEnvironment | NativeMethods.CreateSuspended,
                 0,
                 Path.GetDirectoryName(_explorerPath),
                 ref startup,
                 out var process))
         {
             error = $"无法在独立桌面启动 Explorer（错误 {Marshal.GetLastWin32Error()}）。";
+            StopShell();
             return false;
         }
 
         _processHandle = process.Process;
         _processId = process.ProcessId;
+        if (!NativeMethods.AssignProcessToJobObject(_jobHandle, process.Process))
+        {
+            error = $"无法隔离独立桌面 Explorer（错误 {Marshal.GetLastWin32Error()}）。";
+            NativeMethods.TerminateProcess(process.Process, 1);
+            NativeMethods.CloseHandle(process.Thread);
+            StopShell();
+            return false;
+        }
+        if (NativeMethods.ResumeThread(process.Thread) == uint.MaxValue)
+        {
+            error = $"无法启动独立桌面 Explorer 线程（错误 {Marshal.GetLastWin32Error()}）。";
+            NativeMethods.CloseHandle(process.Thread);
+            StopShell();
+            return false;
+        }
         NativeMethods.CloseHandle(process.Thread);
         error = string.Empty;
         return true;
+    }
+
+    private bool EnsureJob(out string error)
+    {
+        if (_jobHandle != 0)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        _jobHandle = NativeMethods.CreateJobObject(0, null);
+        if (_jobHandle == 0)
+        {
+            error = $"无法创建独立桌面进程容器（错误 {Marshal.GetLastWin32Error()}）。";
+            return false;
+        }
+        var information = new NativeMethods.JobObjectExtendedLimitInformationData
+        {
+            BasicLimitInformation = new NativeMethods.JobObjectBasicLimitInformation
+            {
+                LimitFlags = NativeMethods.JobObjectLimitKillOnJobClose
+            }
+        };
+        if (NativeMethods.SetInformationJobObject(
+            _jobHandle,
+            NativeMethods.JobObjectExtendedLimitInformation,
+            ref information,
+            (uint)Marshal.SizeOf<NativeMethods.JobObjectExtendedLimitInformationData>()))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error = $"无法配置独立桌面进程容器（错误 {Marshal.GetLastWin32Error()}）。";
+        NativeMethods.CloseHandle(_jobHandle);
+        _jobHandle = 0;
+        return false;
     }
 
     private bool TryAdoptReadyShell()
@@ -280,11 +336,18 @@ internal sealed class ExplorerDesktopShellHost(
         if (_processHandle != 0 && IsProcessRunning(_processHandle))
         {
             CloseOwnedShellWindows();
-            if (NativeMethods.WaitForSingleObject(_processHandle, 1_500) == NativeMethods.WaitTimeout)
-            {
-                NativeMethods.TerminateProcess(_processHandle, 0);
-                NativeMethods.WaitForSingleObject(_processHandle, 750);
-            }
+            NativeMethods.WaitForSingleObject(_processHandle, 1_500);
+        }
+        if (_jobHandle != 0)
+        {
+            NativeMethods.CloseHandle(_jobHandle);
+            _jobHandle = 0;
+            if (_processHandle != 0) NativeMethods.WaitForSingleObject(_processHandle, 750);
+        }
+        else if (_processHandle != 0 && IsProcessRunning(_processHandle))
+        {
+            NativeMethods.TerminateProcess(_processHandle, 0);
+            NativeMethods.WaitForSingleObject(_processHandle, 750);
         }
         if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
         _processHandle = 0;
