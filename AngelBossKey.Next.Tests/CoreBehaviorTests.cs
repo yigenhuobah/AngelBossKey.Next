@@ -110,7 +110,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(2, loaded.SchemaVersion);
+        Assert.Equal(6, loaded.SchemaVersion);
         Assert.False(loaded.Hotkey.IsConfigured);
         Assert.Empty(loaded.Targets);
     }
@@ -129,7 +129,22 @@ public sealed class CoreBehaviorTests : IDisposable
     }
 
     [Fact]
-    public async Task SettingsStore_MigratesVersionOneRulesToVersionTwo()
+    public async Task SettingsStore_NormalizesNullLegacyHotkeyInCurrentSchema()
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "settings.json");
+        await File.WriteAllTextAsync(
+            path,
+            """{"schemaVersion":6,"hotkey":null,"targets":[],"scenes":[]}""");
+
+        var loaded = await new JsonSettingsStore(path).LoadAsync();
+
+        Assert.Single(loaded.Scenes);
+        Assert.False(loaded.Hotkey.IsConfigured);
+    }
+
+    [Fact]
+    public async Task SettingsStore_MigratesVersionOneRulesToDefaultScene()
     {
         Directory.CreateDirectory(_directory);
         var path = Path.Combine(_directory, "settings.json");
@@ -139,10 +154,93 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(2, loaded.SchemaVersion);
+        Assert.Equal(6, loaded.SchemaVersion);
+        var scene = Assert.Single(loaded.Scenes);
+        Assert.Equal("默认场景", scene.Name);
         var rule = Assert.Single(loaded.Targets);
         Assert.Equal(string.Empty, rule.TitleIncludes);
         Assert.Equal(string.Empty, rule.TitleExcludes);
+    }
+
+    [Fact]
+    public async Task SettingsStore_RoundTripsMultipleScenesAndAutomation()
+    {
+        var path = Path.Combine(_directory, "settings.json");
+        var first = new SceneProfile
+        {
+            Name = "工作",
+            Hotkey = new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Alt,
+                VirtualKey = 0x31
+            },
+            Targets =
+            [
+                new TargetRule
+                {
+                    DisplayName = "Editor",
+                    ExecutablePath = @"C:\Apps\editor.exe",
+                    MuteWhenHidden = true
+                }
+            ],
+            Automation = new AutomationSettings
+            {
+                IdleMinutes = 5,
+                MouseTrigger = MouseAutomationTrigger.XButton1,
+                EnableLowLevelMouseHook = true,
+                CooldownMilliseconds = 750
+            }
+        };
+        var second = new SceneProfile
+        {
+            Name = "桌面",
+            Mode = SceneMode.PrivacyDesktop,
+            Hotkey = new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift,
+                VirtualKey = 0x32
+            }
+        };
+        var store = new JsonSettingsStore(path);
+
+        await store.SaveAsync(new AppSettings
+        {
+            Scenes = [first, second],
+            ActiveSceneId = second.Id,
+            EnableElevatedBroker = true
+        });
+        var loaded = await store.LoadAsync();
+
+        Assert.Equal(6, loaded.SchemaVersion);
+        Assert.Equal(second.Id, loaded.ActiveSceneId);
+        Assert.True(loaded.EnableElevatedBroker);
+        Assert.Equal(2, loaded.Scenes.Count);
+        Assert.True(loaded.Scenes[0].Targets[0].MuteWhenHidden);
+        Assert.Equal(MouseAutomationTrigger.XButton1, loaded.Scenes[0].Automation.MouseTrigger);
+        Assert.Equal(SceneMode.PrivacyDesktop, loaded.Scenes[1].Mode);
+    }
+
+    [Fact]
+    public async Task SettingsStore_DisablesMouseTriggerUnlessHookIsExplicitlyEnabled()
+    {
+        var path = Path.Combine(_directory, "settings.json");
+        var scene = new SceneProfile
+        {
+            Automation = new AutomationSettings
+            {
+                MouseTrigger = MouseAutomationTrigger.WheelDown,
+                EnableLowLevelMouseHook = false
+            }
+        };
+        await new JsonSettingsStore(path).SaveAsync(new AppSettings
+        {
+            Scenes = [scene],
+            ActiveSceneId = scene.Id
+        });
+
+        var loaded = await new JsonSettingsStore(path).LoadAsync();
+
+        Assert.Equal(MouseAutomationTrigger.None, Assert.Single(loaded.Scenes).Automation.MouseTrigger);
     }
 
     [Fact]
@@ -168,7 +266,8 @@ public sealed class CoreBehaviorTests : IDisposable
                         Right = 800,
                         Bottom = 600
                     },
-                    WasForeground = true
+                    WasForeground = true,
+                    RequiresElevatedBroker = true
                 }
             ]
         };
@@ -179,6 +278,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         Assert.Single(loaded.Windows);
         Assert.Equal(state.Windows[0], loaded.Windows[0]);
+        Assert.True(loaded.Windows[0].RequiresElevatedBroker);
         Assert.False(File.Exists(path));
     }
 
@@ -205,6 +305,35 @@ public sealed class CoreBehaviorTests : IDisposable
         var loaded = await store.LoadAsync();
 
         Assert.Empty(loaded.Windows);
+    }
+
+    [Fact]
+    public async Task AudioRecoveryStore_RoundTripsOriginalSessionStateAndClears()
+    {
+        var path = Path.Combine(_directory, "audio-recovery.json");
+        var store = new JsonAudioRecoveryStore(path);
+        var state = new AudioRecoveryState
+        {
+            Sessions =
+            [
+                new AudioSessionSnapshot
+                {
+                    SessionId = "device|session",
+                    ProcessId = 42,
+                    ProcessStartTimeUtcTicks = 100,
+                    ExecutablePath = @"C:\Apps\player.exe",
+                    Volume = 0.42f,
+                    Muted = false
+                }
+            ]
+        };
+
+        await store.SaveAsync(state);
+        var loaded = await store.LoadAsync();
+        await store.ClearAsync();
+
+        Assert.Equal(state.Sessions[0], Assert.Single(loaded.Sessions));
+        Assert.False(File.Exists(path));
     }
 
     [Fact]

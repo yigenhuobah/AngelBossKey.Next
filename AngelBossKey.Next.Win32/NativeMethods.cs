@@ -18,6 +18,16 @@ internal static partial class NativeMethods
     internal const int SwHide = 0;
     internal const int SwShowNormal = 1;
     internal const uint MonitorDefaultToNearest = 2;
+    internal const int WhMouseLl = 14;
+    internal const int WmMiddleButtonDown = 0x0207;
+    internal const int WmMouseWheel = 0x020A;
+    internal const int WmXButtonDown = 0x020B;
+    internal const int WmHotkey = 0x0312;
+    internal const int WmQuit = 0x0012;
+    internal const uint DesktopReadObjects = 0x0001;
+    internal const uint DesktopCreateWindow = 0x0002;
+    internal const uint DesktopWriteObjects = 0x0080;
+    internal const uint DesktopSwitchDesktop = 0x0100;
 
     internal delegate bool EnumWindowsProc(nint window, nint parameter);
     internal delegate void WinEventProc(
@@ -28,6 +38,7 @@ internal static partial class NativeMethods
         int childId,
         uint eventThread,
         uint eventTime);
+    internal delegate nint LowLevelMouseProc(int code, nint message, nint parameter);
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Point
@@ -71,6 +82,35 @@ internal static partial class NativeMethods
         internal int TokenIsElevated;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LastInputInfo
+    {
+        internal uint Size;
+        internal uint Time;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LowLevelMouseHookData
+    {
+        internal Point Position;
+        internal uint MouseData;
+        internal uint Flags;
+        internal uint Time;
+        internal nuint ExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Message
+    {
+        internal nint Window;
+        internal uint Id;
+        internal nuint WParam;
+        internal nint LParam;
+        internal uint Time;
+        internal Point Point;
+        internal uint Private;
+    }
+
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool EnumWindows(EnumWindowsProc callback, nint parameter);
@@ -96,6 +136,10 @@ internal static partial class NativeMethods
     internal static partial nint GetForegroundWindow();
 
     [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetWindowRect(nint window, out Rect rectangle);
+
+    [LibraryImport("user32.dll")]
     internal static partial nint GetAncestor(nint window, uint flags);
 
     [LibraryImport("user32.dll")]
@@ -118,6 +162,9 @@ internal static partial class NativeMethods
     internal static partial nint MonitorFromRect(in Rect rectangle, uint flags);
 
     [LibraryImport("user32.dll")]
+    internal static partial nint MonitorFromWindow(nint window, uint flags);
+
+    [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetMonitorInfoW(nint monitor, ref MonitorInfo monitorInfo);
 
@@ -128,6 +175,68 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool UnregisterHotKey(nint window, int id);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial nint SetWindowsHookExW(
+        int hookId,
+        LowLevelMouseProc callback,
+        nint module,
+        uint threadId);
+
+    [LibraryImport("user32.dll")]
+    internal static partial nint CallNextHookEx(nint hook, int code, nint message, nint parameter);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnhookWindowsHookEx(nint hook);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetLastInputInfo(ref LastInputInfo info);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint GetModuleHandle(string? moduleName);
+
+    [DllImport("user32.dll", EntryPoint = "CreateDesktopW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern nint CreateDesktop(
+        string desktopName,
+        nint device,
+        nint deviceMode,
+        uint flags,
+        uint desiredAccess,
+        nint securityAttributes);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetThreadDesktop(nint desktop);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SwitchDesktop(nint desktop);
+
+    [LibraryImport("user32.dll")]
+    internal static partial nint GetThreadDesktop(uint threadId);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseDesktop(nint desktop);
+
+    [LibraryImport("user32.dll")]
+    internal static partial int GetMessageW(ref Message message, nint window, uint minimum, uint maximum);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool TranslateMessage(in Message message);
+
+    [LibraryImport("user32.dll")]
+    internal static partial nint DispatchMessageW(in Message message);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PostThreadMessageW(uint threadId, uint message, nuint wParam, nint lParam);
+
+    [LibraryImport("kernel32.dll")]
+    internal static partial uint GetCurrentThreadId();
 
     [LibraryImport("user32.dll")]
     internal static partial nint SetWinEventHook(

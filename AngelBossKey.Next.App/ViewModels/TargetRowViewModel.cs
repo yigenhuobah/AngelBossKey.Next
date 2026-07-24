@@ -12,6 +12,7 @@ public sealed class TargetRowViewModel : ObservableObject
     private string _titleIncludes;
     private string _titleExcludes;
     private bool _isPathValid;
+    private bool _muteWhenHidden;
 
     public TargetRowViewModel(TargetRule rule)
     {
@@ -22,6 +23,7 @@ public sealed class TargetRowViewModel : ObservableObject
         _titleIncludes = rule.TitleIncludes;
         _titleExcludes = rule.TitleExcludes;
         _isPathValid = File.Exists(rule.ExecutablePath);
+        _muteWhenHidden = rule.MuteWhenHidden;
         Icon = IconLoader.LoadFromExecutable(rule.ExecutablePath);
     }
 
@@ -75,6 +77,12 @@ public sealed class TargetRowViewModel : ObservableObject
         set => SetProperty(ref _titleExcludes, value ?? string.Empty);
     }
 
+    public bool MuteWhenHidden
+    {
+        get => _muteWhenHidden;
+        set => SetProperty(ref _muteWhenHidden, value);
+    }
+
     public TargetRule ToModel() => new()
     {
         Id = Id,
@@ -82,7 +90,8 @@ public sealed class TargetRowViewModel : ObservableObject
         ExecutablePath = ExecutablePath,
         Enabled = Enabled,
         TitleIncludes = TitleIncludes.Trim(),
-        TitleExcludes = TitleExcludes.Trim()
+        TitleExcludes = TitleExcludes.Trim(),
+        MuteWhenHidden = MuteWhenHidden
     };
 
     public TargetRule ToEffectiveModel() => ToModel() with { Enabled = EffectiveEnabled };

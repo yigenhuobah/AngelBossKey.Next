@@ -18,6 +18,9 @@ public partial class App : System.Windows.Application
     private WindowEventWatcher? _windowEventWatcher;
     private TrayIconService? _trayIcon;
     private WindowStateMonitor? _windowStateMonitor;
+    private IApplicationAudioController? _audioController;
+    private IAutomationTriggerService? _automationService;
+    private IPrivacyDesktopService? _privacyDesktop;
     private IDiagnosticLog? _diagnosticLog;
     private IWindowVisibilityController? _visibilityController;
     private MainWindowViewModel? _viewModel;
@@ -34,6 +37,17 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        var brokerIndex = Array.FindIndex(e.Args, argument =>
+            string.Equals(argument, "--elevated-broker", StringComparison.OrdinalIgnoreCase));
+        if (brokerIndex >= 0 && e.Args.Length >= brokerIndex + 3)
+        {
+            var exitCode = await ElevatedWindowBrokerServer.RunAsync(
+                e.Args[brokerIndex + 1],
+                e.Args[brokerIndex + 2]);
+            Shutdown(exitCode);
+            return;
+        }
 
         _singleInstance = new SingleInstanceService();
         if (!_singleInstance.IsPrimary)
@@ -59,13 +73,25 @@ public partial class App : System.Windows.Application
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AngelBossKey.Next");
         _diagnosticLog = new RollingDiagnosticLog(Path.Combine(dataDirectory, "logs"));
-        _diagnosticLog.Info("app.start", $"version=0.2.0; background={e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase)}");
+        _diagnosticLog.Info("app.start", $"version=0.6.0; background={e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase)}");
         var settingsStore = new JsonSettingsStore(Path.Combine(dataDirectory, "settings.json"));
         var recoveryStore = new JsonRecoveryStore(Path.Combine(dataDirectory, "recovery.json"));
+        var audioRecoveryStore = new JsonAudioRecoveryStore(Path.Combine(dataDirectory, "audio-recovery.json"));
         var settings = await settingsStore.LoadAsync();
 
         var windowCatalog = new WindowCatalog();
-        _visibilityController = new WindowVisibilityController(windowCatalog, recoveryStore, _diagnosticLog);
+        var elevatedBroker = new ElevatedWindowBrokerClient(
+            settings.EnableElevatedBroker,
+            Environment.ProcessPath!,
+            _diagnosticLog);
+        _visibilityController = new WindowVisibilityController(
+            windowCatalog,
+            recoveryStore,
+            _diagnosticLog,
+            elevatedBroker);
+        _audioController = new ApplicationAudioController(audioRecoveryStore, _diagnosticLog);
+        _automationService = new AutomationTriggerService(_diagnosticLog);
+        _privacyDesktop = new PrivacyDesktopService(_diagnosticLog);
         var startupRegistration = new StartupRegistration();
         _hotkeyService = new GlobalHotkeyService();
         _viewModel = new MainWindowViewModel(
@@ -74,7 +100,11 @@ public partial class App : System.Windows.Application
             _visibilityController,
             startupRegistration,
             _hotkeyService,
-            _diagnosticLog);
+            _diagnosticLog,
+            _audioController,
+            _automationService,
+            _privacyDesktop,
+            elevatedBroker);
 
         _mainWindow = new MainWindow(_viewModel, windowCatalog);
         MainWindow = _mainWindow;
@@ -84,9 +114,17 @@ public partial class App : System.Windows.Application
         _windowSource.AddHook(WindowProcedure);
         _taskbarCreatedMessage = RegisterWindowMessageW("TaskbarCreated");
         _hotkeyService.AttachWindow(handle);
-        _hotkeyService.Pressed += async (_, _) => await Dispatcher.InvokeAsync(ToggleVisibilityAsync);
-        await _viewModel.InitializeHotkeyAsync();
+        _hotkeyService.RegistrationPressed += async (_, args) =>
+            await DispatchOperationAsync(
+                () => _viewModel.ActivateSceneAsync(args.RegistrationId),
+                "hotkey.dispatch");
+        _automationService.Triggered += async (_, args) =>
+            await DispatchOperationAsync(
+                () => _viewModel.HandleAutomationAsync(args.Source),
+                "automation.dispatch");
+        await _viewModel.InitializeAsync();
 
+        await _audioController.RecoverAsync();
         var recovered = await _visibilityController.RecoverAsync();
         _viewModel.SetRecoveryResult(recovered);
 
@@ -101,10 +139,14 @@ public partial class App : System.Windows.Application
             () => Dispatcher.InvokeAsync(RequestExitAsync));
         _visibilityController.StateChanged += (_, _) =>
             Dispatcher.Invoke(() => _trayIcon?.Update(_visibilityController.IsHidden));
+        _privacyDesktop.StateChanged += (_, _) =>
+            Dispatcher.Invoke(() => _trayIcon?.Update(_privacyDesktop.IsActive || _visibilityController.IsHidden));
 
         var background = e.Args.Any(argument =>
             string.Equals(argument, "--background", StringComparison.OrdinalIgnoreCase));
-        if (_activationPending || !background || !settings.Hotkey.IsConfigured)
+        var activeScene = settings.Scenes.FirstOrDefault(scene => scene.Id == settings.ActiveSceneId)
+            ?? settings.Scenes.FirstOrDefault();
+        if (_activationPending || !background || activeScene?.Hotkey.IsConfigured != true)
         {
             ShowMainWindow();
         }
@@ -138,9 +180,9 @@ public partial class App : System.Windows.Application
         _isExiting = true;
         try
         {
-            if (_visibilityController is not null)
+            if (_viewModel is not null)
             {
-                await _visibilityController.RestoreAsync();
+                await _viewModel.RestoreAllAsync();
             }
 
             if (_viewModel is not null)
@@ -159,9 +201,9 @@ public partial class App : System.Windows.Application
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
         _isExiting = true;
-        // Session shutdown must not block the UI thread. Any window still hidden is
-        // covered by the recovery journal and restored on the next launch.
-        DisposeServices();
+        // Preserve recovery journals and avoid COM enumeration/thread joins in the
+        // limited session-ending window. The process exit releases remaining resources.
+        DisposeServices(sessionEnding: true);
 
         base.OnSessionEnding(e);
     }
@@ -175,6 +217,18 @@ public partial class App : System.Windows.Application
 
         await _viewModel.ToggleVisibilityAsync();
         _trayIcon?.Update(_viewModel.IsHidden);
+    }
+
+    private async Task DispatchOperationAsync(Func<Task> operation, string eventName)
+    {
+        try
+        {
+            await Dispatcher.InvokeAsync(operation).Task.Unwrap();
+        }
+        catch (Exception exception)
+        {
+            _diagnosticLog?.Error(eventName, exception);
+        }
     }
 
     private void ShowMainWindow()
@@ -205,7 +259,7 @@ public partial class App : System.Windows.Application
         return 0;
     }
 
-    private void DisposeServices()
+    private void DisposeServices(bool sessionEnding = false)
     {
         if (_servicesDisposed)
         {
@@ -215,6 +269,17 @@ public partial class App : System.Windows.Application
         _servicesDisposed = true;
         _diagnosticLog?.Info("app.stop", $"hidden={_visibilityController?.IsHidden == true}");
         _windowStateMonitor?.Dispose();
+        _automationService?.Dispose();
+        if (sessionEnding)
+        {
+            try { _privacyDesktop?.ReturnAsync().GetAwaiter().GetResult(); }
+            catch (Exception exception) { _diagnosticLog?.Error("desktop.session-ending", exception); }
+        }
+        else
+        {
+            _privacyDesktop?.Dispose();
+            _audioController?.Dispose();
+        }
         _trayIcon?.Dispose();
         _windowEventWatcher?.Dispose();
         _hotkeyService?.Dispose();

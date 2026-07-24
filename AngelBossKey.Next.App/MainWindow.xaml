@@ -5,26 +5,28 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="天使老板键 Next"
-        Width="1080" Height="700" MinWidth="840" MinHeight="560"
+        Width="1180" Height="780" MinWidth="980" MinHeight="650"
         WindowStartupLocation="CenterScreen">
     <Grid Background="{StaticResource BackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="82" />
             <RowDefinition Height="1" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="64" />
+            <RowDefinition Height="76" />
+            <RowDefinition Height="60" />
             <RowDefinition Height="*" />
             <RowDefinition Height="1" />
-            <RowDefinition Height="68" />
+            <RowDefinition Height="64" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Background="{StaticResource SurfaceBrush}" Margin="0">
+        <Grid Grid.Row="0" Background="{StaticResource SurfaceBrush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Border Width="42" Height="42" CornerRadius="8" Margin="24,0,14,0"
+            <Border Width="42" Height="42" CornerRadius="6" Margin="24,0,14,0"
                     Background="#24333B" VerticalAlignment="Center">
                 <Grid>
                     <Ellipse Width="18" Height="18" Fill="{StaticResource AccentBrush}" />
@@ -53,15 +55,15 @@
                 </StackPanel>
             </StackPanel>
             <Button Grid.Column="2" Style="{StaticResource SecondaryButton}" Margin="12,0,10,0"
-                    Click="SetHotkey_Click" MinWidth="144" ToolTip="设置全局隐藏热键"
-                    AutomationProperties.Name="设置全局隐藏热键">
+                    Click="SetHotkey_Click" MinWidth="150" ToolTip="设置当前场景全局热键"
+                    AutomationProperties.Name="设置当前场景热键">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE765;" Margin="0,0,8,0" />
                     <TextBlock Text="{Binding HotkeyText}" />
                 </StackPanel>
             </Button>
             <Button Grid.Column="3" Style="{StaticResource PrimaryButton}" Margin="0,0,24,0"
-                    MinWidth="118" Command="{Binding ToggleVisibilityCommand}"
+                    MinWidth="132" Command="{Binding ToggleVisibilityCommand}"
                     AutomationProperties.Name="{Binding ToggleText}">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE890;" Margin="0,0,8,0" />
@@ -72,7 +74,71 @@
 
         <Border Grid.Row="1" Background="{StaticResource BorderBrush}" />
 
-        <Grid Grid.Row="2" Margin="24,20,24,12">
+        <Grid Grid.Row="2" Background="{StaticResource SurfaceBrush}" Margin="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="240" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="28" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="场景" Margin="24,0,10,0" VerticalAlignment="Center" FontWeight="SemiBold" />
+            <ComboBox x:Name="SceneSelector" Grid.Column="1" ItemsSource="{Binding Scenes}"
+                      SelectionChanged="SceneSelector_SelectionChanged"
+                      DisplayMemberPath="Name" Height="34" VerticalContentAlignment="Center"
+                      AutomationProperties.Name="当前场景" />
+            <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE710;" Margin="8,0,4,0"
+                    ToolTip="新建场景" AutomationProperties.Name="新建场景" Command="{Binding AddSceneCommand}" />
+            <Button Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE74D;"
+                    ToolTip="删除当前场景" AutomationProperties.Name="删除当前场景"
+                    Foreground="{StaticResource DangerBrush}" Command="{Binding RemoveSceneCommand}" />
+            <TextBox Grid.Column="5" Text="{Binding SelectedScene.Name, UpdateSourceTrigger=LostFocus}"
+                     MaxWidth="260" HorizontalAlignment="Left" VerticalAlignment="Center" Padding="8,5"
+                     ToolTip="场景名称" AutomationProperties.Name="场景名称" />
+            <CheckBox Grid.Column="6" Content="独立隐私桌面"
+                      IsChecked="{Binding SelectedScene.IsPrivacyDesktop, Mode=TwoWay}"
+                      Margin="20,0,24,0" ToolTip="使用 Win32 独立 Desktop；不兼容安全桌面、反作弊和独占全屏" />
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="24,0" VerticalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="54" />
+                <ColumnDefinition Width="34" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="74" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="空闲" VerticalAlignment="Center" Foreground="{StaticResource SecondaryTextBrush}" />
+            <TextBox Grid.Column="1" Text="{Binding SelectedScene.IdleMinutes, UpdateSourceTrigger=LostFocus}"
+                     Margin="8,0,0,0" Padding="6,4" ToolTip="0 表示关闭空闲自动隐藏" />
+            <TextBlock Grid.Column="2" Text="分钟" VerticalAlignment="Center" Margin="5,0,0,0"
+                       Foreground="{StaticResource SecondaryTextBrush}" FontSize="12" />
+            <TextBlock Grid.Column="3" Text="鼠标触发" VerticalAlignment="Center" Margin="18,0,8,0"
+                       Foreground="{StaticResource SecondaryTextBrush}" />
+            <ComboBox Grid.Column="4" ItemsSource="{Binding MouseTriggerOptions}"
+                      DisplayMemberPath="Label" SelectedValuePath="Value"
+                      SelectedValue="{Binding SelectedScene.MouseTrigger}" Height="32" />
+            <TextBlock Grid.Column="5" Text="冷却" VerticalAlignment="Center" Margin="18,0,6,0"
+                       Foreground="{StaticResource SecondaryTextBrush}" />
+            <TextBox Grid.Column="6" Text="{Binding SelectedScene.CooldownMilliseconds, UpdateSourceTrigger=LostFocus}"
+                     Padding="6,4" ToolTip="触发冷却时间（毫秒）" />
+            <CheckBox Grid.Column="8" Content="启用低级鼠标钩子"
+                      IsChecked="{Binding SelectedScene.EnableLowLevelMouseHook}"
+                      Margin="18,0" ToolTip="仅侧键、滚轮触发需要；普通场景热键不使用低级钩子" />
+            <CheckBox Grid.Column="9" Content="暂停自动化" IsChecked="{Binding AutomationPaused}" Margin="0,0,18,0" />
+            <CheckBox Grid.Column="10" Content="按需提权" IsChecked="{Binding EnableElevatedBroker}"
+                      ToolTip="处理高权限窗口时才显示 UAC；Broker 完成一次请求后退出" />
+        </Grid>
+
+        <Grid Grid.Row="4" Margin="24,8,24,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -91,11 +157,11 @@
             </Button>
         </Grid>
 
-        <Grid Grid.Row="3" Margin="24,0,24,20">
+        <Grid Grid.Row="5" Margin="24,0,24,18">
             <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1" CornerRadius="6" />
             <TextBlock Text="尚未添加目标程序" HorizontalAlignment="Center" VerticalAlignment="Center"
-                       Foreground="{StaticResource SecondaryTextBrush}" FontSize="14">
+                       Foreground="{StaticResource SecondaryTextBrush}">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -110,7 +176,7 @@
             <DataGrid ItemsSource="{Binding Targets}" AutoGenerateColumns="False" HeadersVisibility="Column"
                       GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource BorderBrush}"
                       BorderThickness="0" Background="Transparent" RowBackground="Transparent"
-                      AlternatingRowBackground="#F8FAFA" RowHeight="86" CanUserAddRows="False"
+                      AlternatingRowBackground="#F8FAFA" RowHeight="84" CanUserAddRows="False"
                       CanUserDeleteRows="False" CanUserResizeRows="False" SelectionMode="Single"
                       IsReadOnly="False" CanUserSortColumns="False">
                 <DataGrid.Resources>
@@ -120,101 +186,57 @@
                         <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
                         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
                         <Setter Property="FontSize" Value="12" />
-                        <Setter Property="Padding" Value="12,0" />
+                        <Setter Property="Padding" Value="10,0" />
                     </Style>
                     <Style TargetType="DataGridCell">
                         <Setter Property="BorderThickness" Value="0" />
-                        <Setter Property="Padding" Value="12,0" />
+                        <Setter Property="Padding" Value="10,0" />
                         <Setter Property="VerticalContentAlignment" Value="Center" />
                     </Style>
                 </DataGrid.Resources>
                 <DataGrid.Columns>
-                    <DataGridTemplateColumn Header="启用" Width="54">
+                    <DataGridCheckBoxColumn Header="启用" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="54" />
+                    <DataGridTemplateColumn Header="程序" Width="170">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                          HorizontalAlignment="Center" />
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                    <DataGridTemplateColumn Header="程序" Width="180">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Image Source="{Binding Icon}" Width="30" Height="30" Margin="0,0,12,0" />
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
-                                                   MaxWidth="118" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding StatusText}" FontSize="11" Margin="0,4,0,0">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsPathValid}" Value="False">
-                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding TemporarilyExcluded}" Value="True">
-                                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                                <StackPanel Orientation="Horizontal">
+                                    <Image Source="{Binding Icon}" Width="28" Height="28" Margin="0,0,10,0" />
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" MaxWidth="110" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding StatusText}" FontSize="11" Margin="0,4,0,0" Foreground="{StaticResource SecondaryTextBrush}" />
                                     </StackPanel>
                                 </StackPanel>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTemplateColumn Header="标题条件" Width="230">
+                    <DataGridTemplateColumn Header="标题条件" Width="220">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <Grid VerticalAlignment="Center">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="42" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="包含" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"
-                                               VerticalAlignment="Center" />
-                                    <TextBox Grid.Column="1" Text="{Binding TitleIncludes, UpdateSourceTrigger=LostFocus}"
-                                             ToolTip="留空时匹配该程序的全部窗口" Padding="6,3" />
-                                    <TextBlock Grid.Row="1" Text="排除" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"
-                                               VerticalAlignment="Center" Margin="0,5,0,0" />
-                                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding TitleExcludes, UpdateSourceTrigger=LostFocus}"
-                                             ToolTip="标题包含该文字的窗口不隐藏" Padding="6,3" Margin="0,5,0,0" />
+                                <Grid>
+                                    <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="38" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <TextBlock Text="包含" FontSize="11" VerticalAlignment="Center" Foreground="{StaticResource SecondaryTextBrush}" />
+                                    <TextBox Grid.Column="1" Text="{Binding TitleIncludes, UpdateSourceTrigger=LostFocus}" Padding="5,2" />
+                                    <TextBlock Grid.Row="1" Text="排除" FontSize="11" VerticalAlignment="Center" Margin="0,5,0,0" Foreground="{StaticResource SecondaryTextBrush}" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding TitleExcludes, UpdateSourceTrigger=LostFocus}" Padding="5,2" Margin="0,5,0,0" />
                                 </Grid>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
                     <DataGridTextColumn Header="可执行文件" Binding="{Binding ExecutablePath}" Width="*" IsReadOnly="True" />
-                    <DataGridTemplateColumn Header="临时排除" Width="72">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <CheckBox IsChecked="{Binding TemporarilyExcluded, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                          HorizontalAlignment="Center" ToolTip="仅本次运行不参与隐藏" />
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
+                    <DataGridCheckBoxColumn Header="静音" Binding="{Binding MuteWhenHidden, UpdateSourceTrigger=PropertyChanged}" Width="54" />
+                    <DataGridCheckBoxColumn Header="临时排除" Binding="{Binding TemporarilyExcluded, UpdateSourceTrigger=PropertyChanged}" Width="74" />
                     <DataGridTemplateColumn Width="116">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
                                     <Button Style="{StaticResource IconButton}" Content="&#xE74A;" ToolTip="上移"
-                                            AutomationProperties.Name="上移规则"
-                                            Command="{Binding DataContext.MoveTargetUpCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                            CommandParameter="{Binding}" />
+                                            AutomationProperties.Name="上移规则" Command="{Binding DataContext.MoveTargetUpCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" />
                                     <Button Style="{StaticResource IconButton}" Content="&#xE74B;" ToolTip="下移" Margin="4,0"
-                                            AutomationProperties.Name="下移规则"
-                                            Command="{Binding DataContext.MoveTargetDownCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                            CommandParameter="{Binding}" />
+                                            AutomationProperties.Name="下移规则" Command="{Binding DataContext.MoveTargetDownCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" />
                                     <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="移除目标"
-                                            AutomationProperties.Name="移除目标"
-                                            Foreground="{StaticResource DangerBrush}"
-                                            Command="{Binding DataContext.RemoveTargetCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                            CommandParameter="{Binding}" />
+                                            AutomationProperties.Name="移除目标" Foreground="{StaticResource DangerBrush}"
+                                            Command="{Binding DataContext.RemoveTargetCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" />
                                 </StackPanel>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
@@ -223,8 +245,8 @@
             </DataGrid>
         </Grid>
 
-        <Border Grid.Row="4" Background="{StaticResource BorderBrush}" />
-        <Grid Grid.Row="5" Background="{StaticResource SurfaceBrush}" Margin="0">
+        <Border Grid.Row="6" Background="{StaticResource BorderBrush}" />
+        <Grid Grid.Row="7" Background="{StaticResource SurfaceBrush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -236,10 +258,8 @@
             <Button Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE838;"
                     ToolTip="打开诊断日志目录" AutomationProperties.Name="打开诊断日志目录"
                     Click="OpenLogs_Click" Margin="0,0,16,0" />
-            <CheckBox Grid.Column="2" Content="开机启动" IsChecked="{Binding LaunchAtLogin}"
-                      Margin="16,0,24,0" />
-            <CheckBox Grid.Column="3" Content="关闭到托盘" IsChecked="{Binding CloseToTray}"
-                      Margin="0,0,24,0" />
+            <CheckBox Grid.Column="2" Content="开机启动" IsChecked="{Binding LaunchAtLogin}" Margin="16,0,24,0" />
+            <CheckBox Grid.Column="3" Content="关闭到托盘" IsChecked="{Binding CloseToTray}" Margin="0,0,24,0" />
         </Grid>
     </Grid>
 </Window>

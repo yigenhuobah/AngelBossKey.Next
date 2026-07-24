@@ -15,6 +15,13 @@ public interface IRecoveryStore
     Task ClearAsync(CancellationToken cancellationToken = default);
 }
 
+public interface IAudioRecoveryStore
+{
+    Task<AudioRecoveryState> LoadAsync(CancellationToken cancellationToken = default);
+    Task SaveAsync(AudioRecoveryState state, CancellationToken cancellationToken = default);
+    Task ClearAsync(CancellationToken cancellationToken = default);
+}
+
 public interface IWindowCatalog
 {
     IReadOnlyList<WindowInfo> GetVisibleWindows();
@@ -51,4 +58,37 @@ public interface IStartupRegistration
 {
     bool IsEnabledFor(string executablePath);
     void SetEnabled(bool enabled, string executablePath);
+}
+
+public interface IApplicationAudioController : IDisposable
+{
+    bool IsActive { get; }
+    int PendingRestoreCount { get; }
+    Task<int> MuteAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default);
+    Task<int> RestoreAsync(CancellationToken cancellationToken = default);
+    Task<int> RecoverAsync(CancellationToken cancellationToken = default);
+    Task ReconcileAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default);
+}
+
+public interface IAutomationTriggerService : IDisposable
+{
+    event EventHandler<AutomationTriggeredEventArgs>? Triggered;
+    bool IsPaused { get; set; }
+    void Configure(AutomationSettings settings);
+}
+
+public interface IElevatedWindowBroker
+{
+    bool IsEnabled { get; set; }
+    Task<ElevatedWindowResponse> ExecuteAsync(
+        ElevatedWindowRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IPrivacyDesktopService : IDisposable
+{
+    bool IsActive { get; }
+    event EventHandler? StateChanged;
+    Task<(bool Success, string Message)> EnterAsync(CancellationToken cancellationToken = default);
+    Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default);
 }

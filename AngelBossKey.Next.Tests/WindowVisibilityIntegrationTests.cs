@@ -3,6 +3,7 @@ using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Core.Storage;
 using AngelBossKey.Next.Win32;
 using System.Diagnostics;
+using System.IO.Pipes;
 using Forms = System.Windows.Forms;
 
 namespace AngelBossKey.Next.Tests;
@@ -61,6 +62,33 @@ public sealed class WindowVisibilityIntegrationTests
             firstWindow.Invoke(() => firstService.Dispose());
             secondWindow.Invoke(() => secondService.Dispose());
         }
+    }
+
+    [Fact]
+    public async Task HotkeyService_RegistersIndependentHotkeysForMultipleScenes()
+    {
+        using var window = await TestWindowHost.StartAsync();
+        using var service = new GlobalHotkeyService();
+        var firstScene = Guid.NewGuid();
+        var secondScene = Guid.NewGuid();
+        var result = window.Invoke(() =>
+        {
+            service.AttachWindow((nint)window.Handle);
+            var first = service.TryRegister(firstScene, new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.Alt,
+                VirtualKey = 0x7C
+            }, out var firstError);
+            var second = service.TryRegister(secondScene, new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.Alt,
+                VirtualKey = 0x7D
+            }, out var secondError);
+            return (first, firstError, second, secondError);
+        });
+
+        Assert.True(result.first, result.firstError);
+        Assert.True(result.second, result.secondError);
     }
 
     [Fact]
@@ -180,6 +208,161 @@ public sealed class WindowVisibilityIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task DelayedAsynchronousHide_KeepsJournalUntilWindowCanBeRestored()
+    {
+        using var testWindow = await TestWindowHost.StartAsync("Delayed hide");
+        var process = Process.GetCurrentProcess();
+        var window = CreateWindow(testWindow, process, "Delayed hide");
+        var directory = Path.Combine(Path.GetTempPath(), "AngelBossKey.Next.Tests", Guid.NewGuid().ToString("N"));
+        var journalPath = Path.Combine(directory, "recovery.json");
+
+        try
+        {
+            var controller = new WindowVisibilityController(
+                new FixedWindowCatalog(window),
+                new JsonRecoveryStore(journalPath),
+                nativeActions: new DelayedHideWindowActions(TimeSpan.FromMilliseconds(750)));
+            var result = await controller.HideAsync(
+            [
+                new TargetRule { DisplayName = "Delayed", ExecutablePath = window.ExecutablePath }
+            ]);
+
+            Assert.Equal(0, result.ChangedCount);
+            Assert.Equal(1, result.FailedCount);
+            Assert.True(File.Exists(journalPath));
+
+            Assert.True(SpinWait.SpinUntil(
+                () => !NativeMethods.IsWindowVisible((nint)window.Handle),
+                TimeSpan.FromSeconds(3)));
+
+            var restored = await controller.RestoreAsync();
+            Assert.Equal(1, restored.ChangedCount);
+            Assert.True(NativeMethods.IsWindowVisible((nint)window.Handle));
+            Assert.False(File.Exists(journalPath));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokerProtocol_ExchangesFramedRequestAndResponseWithoutClosingPipe()
+    {
+        using var testWindow = await TestWindowHost.StartAsync("Broker protocol");
+        var process = Process.GetCurrentProcess();
+        var pipeName = $"AngelBossKey.Next.Tests.{Guid.NewGuid():N}";
+        var token = Convert.ToHexString(Guid.NewGuid().ToByteArray());
+        await using var server = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        var brokerTask = ElevatedWindowBrokerServer.RunAsync(pipeName, token);
+        await server.WaitForConnectionAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        var record = new HiddenWindowRecord
+        {
+            Handle = testWindow.Handle,
+            ProcessId = process.Id,
+            ProcessStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+            ExecutablePath = Environment.ProcessPath!,
+            Placement = new WindowPlacementSnapshot
+            {
+                ShowCommand = NativeMethods.SwShowNormal,
+                Left = 80,
+                Top = 80,
+                Right = 560,
+                Bottom = 400
+            }
+        };
+
+        await ElevatedWindowBrokerProtocol.WriteAsync(
+            server,
+            new ElevatedWindowBrokerClient.BrokerEnvelope
+            {
+                Token = token,
+                Request = new ElevatedWindowRequest
+                {
+                    Command = ElevatedWindowCommand.Query,
+                    Windows = [record]
+                }
+            },
+            CancellationToken.None);
+        var response = await ElevatedWindowBrokerProtocol.ReadAsync<ElevatedWindowResponse>(
+            server,
+            CancellationToken.None);
+
+        Assert.NotNull(response);
+        Assert.Equal(1, response.ChangedCount);
+        Assert.Equal(0, response.FailedCount);
+        Assert.Equal(0, await brokerTask.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public async Task Broker_HidesAndRestoresResponsiveWindowAfterAsyncConfirmation()
+    {
+        using var testWindow = await TestWindowHost.StartAsync("Broker visibility");
+        var process = Process.GetCurrentProcess();
+        var record = new HiddenWindowRecord
+        {
+            Handle = testWindow.Handle,
+            ProcessId = process.Id,
+            ProcessStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+            ExecutablePath = Environment.ProcessPath!,
+            Placement = new WindowPlacementSnapshot
+            {
+                ShowCommand = NativeMethods.SwShowNormal,
+                Left = 80,
+                Top = 80,
+                Right = 560,
+                Bottom = 400
+            }
+        };
+
+        var hidden = await ExecuteBrokerRequestAsync(new ElevatedWindowRequest
+        {
+            Command = ElevatedWindowCommand.Hide,
+            Windows = [record]
+        });
+        Assert.Equal(1, hidden.ChangedCount);
+        Assert.Equal(0, hidden.FailedCount);
+        Assert.False(NativeMethods.IsWindowVisible((nint)testWindow.Handle));
+
+        var restored = await ExecuteBrokerRequestAsync(new ElevatedWindowRequest
+        {
+            Command = ElevatedWindowCommand.Restore,
+            Windows = [record]
+        });
+        Assert.Equal(1, restored.ChangedCount);
+        Assert.Equal(0, restored.FailedCount);
+        Assert.True(NativeMethods.IsWindowVisible((nint)testWindow.Handle));
+    }
+
+    private static async Task<ElevatedWindowResponse> ExecuteBrokerRequestAsync(ElevatedWindowRequest request)
+    {
+        var pipeName = $"AngelBossKey.Next.Tests.{Guid.NewGuid():N}";
+        var token = Convert.ToHexString(Guid.NewGuid().ToByteArray());
+        await using var server = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        var brokerTask = ElevatedWindowBrokerServer.RunAsync(pipeName, token);
+        await server.WaitForConnectionAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await ElevatedWindowBrokerProtocol.WriteAsync(
+            server,
+            new ElevatedWindowBrokerClient.BrokerEnvelope { Token = token, Request = request },
+            CancellationToken.None);
+        var response = await ElevatedWindowBrokerProtocol.ReadAsync<ElevatedWindowResponse>(
+            server,
+            CancellationToken.None);
+        Assert.Equal(0, await brokerTask.WaitAsync(TimeSpan.FromSeconds(3)));
+        return Assert.IsType<ElevatedWindowResponse>(response);
+    }
+
     private static WindowInfo CreateWindow(TestWindowHost host, Process process, string title) => new()
     {
         Handle = host.Handle,
@@ -202,6 +385,26 @@ public sealed class WindowVisibilityIntegrationTests
             windows.Where(window => NativeMethods.IsWindowVisible((nint)window.Handle)).ToArray();
 
         public WindowInfo? TryGetWindow(long handle) => windows.FirstOrDefault(window => window.Handle == handle);
+    }
+
+    private sealed class DelayedHideWindowActions(TimeSpan delay) : IWindowNativeActions
+    {
+        public bool Exists(long handle) => NativeMethods.IsWindow((nint)handle);
+        public bool IsVisible(long handle) => NativeMethods.IsWindowVisible((nint)handle);
+        public void RequestShow(long handle, int command)
+        {
+            if (command != NativeMethods.SwHide)
+            {
+                _ = NativeMethods.ShowWindowAsync((nint)handle, command);
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(delay);
+                _ = NativeMethods.ShowWindowAsync((nint)handle, command);
+            });
+        }
     }
 
     private sealed class TestWindowHost : IDisposable

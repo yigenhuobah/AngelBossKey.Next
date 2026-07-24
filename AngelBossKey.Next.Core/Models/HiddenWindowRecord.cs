@@ -22,6 +22,7 @@ public sealed record HiddenWindowRecord
     public required string ExecutablePath { get; init; }
     public required WindowPlacementSnapshot Placement { get; init; }
     public bool WasForeground { get; init; }
+    public bool RequiresElevatedBroker { get; init; }
     public DateTimeOffset HiddenAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -36,4 +37,43 @@ public sealed record VisibilityOperationResult
     public int ChangedCount { get; init; }
     public int SkippedElevatedCount { get; init; }
     public int FailedCount { get; init; }
+    public string? Detail { get; init; }
+}
+
+public enum ElevatedWindowCommand
+{
+    Query,
+    Hide,
+    Restore
+}
+
+public sealed record ElevatedWindowRequest
+{
+    public ElevatedWindowCommand Command { get; init; }
+    public List<long> Handles { get; init; } = [];
+    public List<HiddenWindowRecord> Windows { get; init; } = [];
+}
+
+public sealed record ElevatedWindowResponse
+{
+    public int ChangedCount { get; init; }
+    public int FailedCount { get; init; }
+    public string Message { get; init; } = string.Empty;
+}
+
+public sealed record AudioSessionSnapshot
+{
+    public required string SessionId { get; init; }
+    public required int ProcessId { get; init; }
+    public required long ProcessStartTimeUtcTicks { get; init; }
+    public required string ExecutablePath { get; init; }
+    public float Volume { get; init; }
+    public bool Muted { get; init; }
+    public DateTimeOffset CapturedAt { get; init; } = DateTimeOffset.UtcNow;
+}
+
+public sealed record AudioRecoveryState
+{
+    public int SchemaVersion { get; init; } = 1;
+    public List<AudioSessionSnapshot> Sessions { get; init; } = [];
 }

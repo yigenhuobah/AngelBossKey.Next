@@ -11,13 +11,18 @@ public partial class MainWindow : Window
 {
     private readonly MainWindowViewModel _viewModel;
     private readonly IWindowCatalog _windowCatalog;
+    private bool _synchronizingSceneSelection;
+    private int _pendingSceneSelections;
+    private long _sceneSelectionVersion;
 
     public MainWindow(MainWindowViewModel viewModel, IWindowCatalog windowCatalog)
     {
-        InitializeComponent();
         _viewModel = viewModel;
         _windowCatalog = windowCatalog;
+        InitializeComponent();
         DataContext = viewModel;
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        SynchronizeSceneSelection();
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -48,6 +53,40 @@ public partial class MainWindow : Window
         {
             await _viewModel.SetHotkeyAsync(dialog.Gesture);
         }
+    }
+
+    private async void SceneSelector_SelectionChanged(
+        object sender,
+        System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_synchronizingSceneSelection) return;
+        if (sender is not System.Windows.Controls.ComboBox { SelectedItem: SceneRowViewModel scene } selector) return;
+        var requestVersion = ++_sceneSelectionVersion;
+        _pendingSceneSelections++;
+        try
+        {
+            await _viewModel.SelectSceneAsync(scene);
+        }
+        finally
+        {
+            _pendingSceneSelections--;
+            if (requestVersion == _sceneSelectionVersion) SynchronizeSceneSelection();
+        }
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainWindowViewModel.SelectedScene) && _pendingSceneSelections == 0)
+        {
+            SynchronizeSceneSelection();
+        }
+    }
+
+    private void SynchronizeSceneSelection()
+    {
+        _synchronizingSceneSelection = true;
+        try { SceneSelector.SelectedItem = _viewModel.SelectedScene; }
+        finally { _synchronizingSceneSelection = false; }
     }
 
     private void OpenLogs_Click(object sender, RoutedEventArgs e)

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 
 namespace AngelBossKey.Next.Win32;
 
@@ -26,6 +27,48 @@ internal sealed class ProcessAccessInspector
         catch
         {
             return 0;
+        }
+    }
+
+    internal static bool IsSameUserAndSession(int processId)
+    {
+        try
+        {
+            using var targetProcess = Process.GetProcessById(processId);
+            using var currentProcess = Process.GetCurrentProcess();
+            if (targetProcess.SessionId != currentProcess.SessionId) return false;
+
+            var targetSid = GetProcessUserSid((uint)processId);
+            using var currentIdentity = WindowsIdentity.GetCurrent();
+            return targetSid is not null && currentIdentity.User is not null &&
+                string.Equals(targetSid, currentIdentity.User.Value, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? GetProcessUserSid(uint processId)
+    {
+        var process = NativeMethods.OpenProcess(NativeMethods.ProcessQueryLimitedInformation, false, processId);
+        if (process == 0) return null;
+        try
+        {
+            if (!NativeMethods.OpenProcessToken(process, NativeMethods.TokenQuery, out var token)) return null;
+            try
+            {
+                using var identity = new WindowsIdentity(token);
+                return identity.User?.Value;
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(token);
+            }
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(process);
         }
     }
 

@@ -184,6 +184,195 @@ public sealed class ViewModelBehaviorTests
         }
     }
 
+    [Fact]
+    public void MuteWhenHidden_IsPersistedWithTheActiveScene()
+    {
+        var store = new MemorySettingsStore();
+        var viewModel = CreateViewModel(store, new FakeVisibilityController(), CreateSettingsWithTargets("Editor"));
+
+        viewModel.Targets[0].MuteWhenHidden = true;
+
+        Assert.True(SpinWait.SpinUntil(
+            () => store.LastSaved?.Scenes.Single().Targets.Single().MuteWhenHidden == true,
+            TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public async Task SwitchingSceneWhileHidden_RestoresBeforeChangingSelection()
+    {
+        var first = new SceneProfile { Name = "First" };
+        var second = new SceneProfile { Name = "Second" };
+        var settings = new AppSettings
+        {
+            Scenes = [first, second],
+            ActiveSceneId = first.Id
+        };
+        var controller = new FakeVisibilityController { IsHidden = true };
+        var viewModel = CreateViewModel(new MemorySettingsStore(), controller, settings);
+
+        await viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+
+        Assert.Equal(1, controller.RestoreCalls);
+        Assert.Equal("Second", viewModel.SelectedScene.Name);
+    }
+
+    [Fact]
+    public async Task RejectedSceneSwitch_NotifiesUiToRestoreActualSelection()
+    {
+        var first = new SceneProfile { Name = "First" };
+        var second = new SceneProfile { Name = "Second" };
+        var controller = new FakeVisibilityController
+        {
+            IsHidden = true,
+            RestoreLeavesHidden = true
+        };
+        var viewModel = CreateViewModel(
+            new MemorySettingsStore(),
+            controller,
+            new AppSettings { Scenes = [first, second], ActiveSceneId = first.Id });
+        var selectionNotifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.SelectedScene)) selectionNotifications++;
+        };
+
+        var switched = await viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+
+        Assert.False(switched);
+        Assert.Equal("First", viewModel.SelectedScene.Name);
+        Assert.True(selectionNotifications > 0);
+    }
+
+    [Fact]
+    public async Task ConcurrentSceneSwitch_FirstFailureCannotOverwriteNewerSuccess()
+    {
+        var first = new SceneProfile { Name = "First" };
+        var second = new SceneProfile { Name = "Second" };
+        var third = new SceneProfile { Name = "Third" };
+        var controller = new FakeVisibilityController
+        {
+            IsHidden = true,
+            FailBlockedFirstRestore = true
+        };
+        var viewModel = CreateViewModel(
+            new MemorySettingsStore(),
+            controller,
+            new AppSettings { Scenes = [first, second, third], ActiveSceneId = first.Id });
+
+        var olderRequest = viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+        await controller.FirstRestoreStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var newerRequest = viewModel.SelectSceneAsync(viewModel.Scenes[2]);
+        controller.ReleaseFirstRestore.TrySetResult();
+
+        Assert.False(await olderRequest);
+        Assert.True(await newerRequest);
+        Assert.Equal("Third", viewModel.SelectedScene.Name);
+    }
+
+    [Fact]
+    public async Task IdleAutomation_DoesNotRestoreAnAlreadyHiddenScene()
+    {
+        var controller = new FakeVisibilityController { IsHidden = true };
+        var viewModel = CreateViewModel(new MemorySettingsStore(), controller);
+
+        await viewModel.HandleAutomationAsync(AutomationTriggerSource.Idle);
+
+        Assert.Equal(0, controller.RestoreCalls);
+    }
+
+    [Fact]
+    public async Task HidingScene_MutesOnlyAfterWindowTransactionStarts()
+    {
+        var audio = new FakeAudioController();
+        var controller = new FakeVisibilityController();
+        var settings = CreateSettingsWithTargets("Editor") with
+        {
+            Hotkey = new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control,
+                VirtualKey = 0x31
+            }
+        };
+        var viewModel = new MainWindowViewModel(
+            settings,
+            new MemorySettingsStore(),
+            controller,
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio);
+
+        await viewModel.ToggleVisibilityAsync();
+
+        Assert.Equal(1, controller.HideCalls);
+        Assert.Equal(1, audio.MuteCalls);
+    }
+
+    [Fact]
+    public async Task SceneSwitch_RollsBackWhenSettingsWriteFails()
+    {
+        var first = new SceneProfile { Name = "First" };
+        var second = new SceneProfile { Name = "Second" };
+        var viewModel = CreateViewModel(
+            new FailingSettingsStore(),
+            new FakeVisibilityController(),
+            new AppSettings { Scenes = [first, second], ActiveSceneId = first.Id });
+
+        var switched = await viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+
+        Assert.False(switched);
+        Assert.Equal("First", viewModel.SelectedScene.Name);
+        Assert.StartsWith("切换场景失败", viewModel.Message);
+    }
+
+    [Fact]
+    public async Task SceneSwitch_RollsBackWhenAutomationReconfigurationThrows()
+    {
+        var first = new SceneProfile { Name = "First" };
+        var second = new SceneProfile { Name = "Second" };
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [first, second], ActiveSceneId = first.Id },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            automationService: new ThrowingAutomationService());
+
+        var switched = await viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+
+        Assert.False(switched);
+        Assert.Equal("First", viewModel.SelectedScene.Name);
+        Assert.StartsWith("切换场景失败", viewModel.Message);
+    }
+
+    [Fact]
+    public async Task PrivacyDesktopFailure_FallsBackToWindowHiding()
+    {
+        var scene = new SceneProfile
+        {
+            Name = "Privacy",
+            Mode = SceneMode.PrivacyDesktop,
+            Hotkey = new HotkeyGesture { Modifiers = HotkeyModifiers.Control, VirtualKey = 0x31 },
+            Targets =
+            [
+                new TargetRule { DisplayName = "Editor", ExecutablePath = Environment.ProcessPath! }
+            ]
+        };
+        var controller = new FakeVisibilityController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
+            new MemorySettingsStore(),
+            controller,
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            privacyDesktop: new FailingPrivacyDesktopService());
+
+        var result = await viewModel.ToggleVisibilityAsync();
+
+        Assert.Equal(1, controller.HideCalls);
+        Assert.True(controller.IsHidden);
+        Assert.Contains("回退为普通窗口隐藏", result.Detail);
+    }
+
     private static MainWindowViewModel CreateViewModel(
         ISettingsStore settingsStore,
         FakeVisibilityController controller,
@@ -259,25 +448,47 @@ public sealed class ViewModelBehaviorTests
     {
         public bool IsHidden { get; set; }
         public int RestoreCalls { get; private set; }
+        public int HideCalls { get; private set; }
         public int UpdateCalls { get; private set; }
         public IReadOnlyCollection<TargetRule>? LastTargets { get; private set; }
         public bool FailFirstSelfCheck { get; init; }
+        public bool RestoreLeavesHidden { get; init; }
+        public bool FailBlockedFirstRestore { get; init; }
         public int SelfCheckCalls { get; private set; }
+        public TaskCompletionSource FirstRestoreStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstRestore { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SecondSelfCheckReached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public event EventHandler? StateChanged;
 
         public Task<VisibilityOperationResult> HideAsync(
             IReadOnlyCollection<TargetRule> targets,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new VisibilityOperationResult());
+            CancellationToken cancellationToken = default)
+        {
+            HideCalls++;
+            IsHidden = true;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return Task.FromResult(new VisibilityOperationResult());
+        }
 
-        public Task<VisibilityOperationResult> RestoreAsync(CancellationToken cancellationToken = default)
+        public async Task<VisibilityOperationResult> RestoreAsync(CancellationToken cancellationToken = default)
         {
             RestoreCalls++;
-            IsHidden = false;
+            var shouldFail = RestoreLeavesHidden || (FailBlockedFirstRestore && RestoreCalls == 1);
+            if (FailBlockedFirstRestore && RestoreCalls == 1)
+            {
+                FirstRestoreStarted.TrySetResult();
+                await ReleaseFirstRestore.Task.WaitAsync(cancellationToken);
+            }
+            IsHidden = shouldFail;
             StateChanged?.Invoke(this, EventArgs.Empty);
-            return Task.FromResult(new VisibilityOperationResult { ChangedCount = 1 });
+            return new VisibilityOperationResult
+            {
+                ChangedCount = shouldFail ? 0 : 1,
+                FailedCount = shouldFail ? 1 : 0
+            };
         }
 
         public Task<VisibilityOperationResult> RecoverAsync(CancellationToken cancellationToken = default) =>
@@ -312,5 +523,46 @@ public sealed class ViewModelBehaviorTests
 
         public Task ForgetDestroyedWindowAsync(long handle, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class FakeAudioController : IApplicationAudioController
+    {
+        public bool IsActive => MuteCalls > RestoreCalls;
+        public int PendingRestoreCount => 0;
+        public int MuteCalls { get; private set; }
+        public int RestoreCalls { get; private set; }
+        public Task<int> MuteAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default)
+        {
+            MuteCalls++;
+            return Task.FromResult(0);
+        }
+        public Task<int> RestoreAsync(CancellationToken cancellationToken = default)
+        {
+            RestoreCalls++;
+            return Task.FromResult(0);
+        }
+        public Task<int> RecoverAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task ReconcileAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+        public void Dispose() { }
+    }
+
+    private sealed class FailingPrivacyDesktopService : IPrivacyDesktopService
+    {
+        public bool IsActive => false;
+        public event EventHandler? StateChanged { add { } remove { } }
+        public Task<(bool Success, string Message)> EnterAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult((false, "桌面切换失败。"));
+        public Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult((true, "已返回。"));
+        public void Dispose() { }
+    }
+
+    private sealed class ThrowingAutomationService : IAutomationTriggerService
+    {
+        public event EventHandler<AutomationTriggeredEventArgs>? Triggered { add { } remove { } }
+        public bool IsPaused { get; set; }
+        public void Configure(AutomationSettings settings) => throw new InvalidOperationException("Test automation failure");
+        public void Dispose() { }
     }
 }
