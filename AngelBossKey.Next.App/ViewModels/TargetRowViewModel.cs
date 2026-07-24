@@ -11,6 +11,7 @@ public sealed class TargetRowViewModel : ObservableObject
     private bool _temporarilyExcluded;
     private string _titleIncludes;
     private string _titleExcludes;
+    private bool _isPathValid;
 
     public TargetRowViewModel(TargetRule rule)
     {
@@ -20,6 +21,7 @@ public sealed class TargetRowViewModel : ObservableObject
         _enabled = rule.Enabled;
         _titleIncludes = rule.TitleIncludes;
         _titleExcludes = rule.TitleExcludes;
+        _isPathValid = File.Exists(rule.ExecutablePath);
         Icon = IconLoader.LoadFromExecutable(rule.ExecutablePath);
     }
 
@@ -27,7 +29,7 @@ public sealed class TargetRowViewModel : ObservableObject
     public string DisplayName { get; }
     public string ExecutablePath { get; }
     public ImageSource Icon { get; }
-    public bool IsPathValid => File.Exists(ExecutablePath);
+    public bool IsPathValid => _isPathValid;
     public bool EffectiveEnabled => Enabled && !TemporarilyExcluded && IsPathValid;
     public string StatusText => !IsPathValid
         ? "路径失效"
@@ -84,4 +86,19 @@ public sealed class TargetRowViewModel : ObservableObject
     };
 
     public TargetRule ToEffectiveModel() => ToModel() with { Enabled = EffectiveEnabled };
+
+    public bool RefreshPathValidity()
+    {
+        var isValid = File.Exists(ExecutablePath);
+        if (isValid == _isPathValid)
+        {
+            return false;
+        }
+
+        _isPathValid = isValid;
+        OnPropertyChanged(nameof(IsPathValid));
+        OnPropertyChanged(nameof(EffectiveEnabled));
+        OnPropertyChanged(nameof(StatusText));
+        return true;
+    }
 }

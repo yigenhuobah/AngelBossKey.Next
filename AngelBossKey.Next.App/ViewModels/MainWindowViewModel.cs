@@ -18,9 +18,11 @@ public sealed class MainWindowViewModel : ObservableObject
     private readonly GlobalHotkeyService _hotkeyService;
     private readonly IDiagnosticLog _diagnosticLog;
     private readonly object _settingsSaveSync = new();
+    private readonly object _ruleTaskSync = new();
     private readonly SemaphoreSlim _hotkeyChangeGate = new(1, 1);
     private readonly SemaphoreSlim _ruleChangeGate = new(1, 1);
     private Task _settingsSaveTail = Task.CompletedTask;
+    private Task _ruleChangeTail = Task.CompletedTask;
     private AppSettings _settings;
     private string _message = "添加目标程序并设置热键后即可启用。";
     private bool _isBusy;
@@ -310,6 +312,13 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public async Task FlushSettingsAsync()
     {
+        Task ruleChanges;
+        lock (_ruleTaskSync)
+        {
+            ruleChanges = _ruleChangeTail;
+        }
+        await ruleChanges;
+
         await _hotkeyChangeGate.WaitAsync();
         _hotkeyChangeGate.Release();
 
@@ -343,6 +352,17 @@ public sealed class MainWindowViewModel : ObservableObject
             _diagnosticLog.Error("settings.save", exception);
             Message = $"保存设置失败：{exception.Message}";
         }
+    }
+
+    public void RefreshPathValidity()
+    {
+        if (!Targets.Any(target => target.RefreshPathValidity()))
+        {
+            return;
+        }
+
+        RefreshTargetState();
+        QueueRuleChanges(IsHidden ? "程序路径状态已更新，隐藏规则已重新应用。" : null);
     }
 
     private static string BuildOperationMessage(VisibilityOperationResult result, bool restoring)
@@ -395,7 +415,7 @@ public sealed class MainWindowViewModel : ObservableObject
 
         target.PropertyChanged -= OnTargetPropertyChanged;
         Targets.Remove(target);
-        _ = ApplyRuleChangesAsync($"已移除 {target.DisplayName}。");
+        QueueRuleChanges($"已移除 {target.DisplayName}。");
         RefreshTargetState();
     }
 
@@ -414,7 +434,7 @@ public sealed class MainWindowViewModel : ObservableObject
         }
 
         Targets.Move(oldIndex, newIndex);
-        _ = ApplyRuleChangesAsync("规则顺序已更新。");
+        QueueRuleChanges("规则顺序已更新。");
     }
 
     private void OnTargetPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -424,7 +444,7 @@ public sealed class MainWindowViewModel : ObservableObject
             nameof(TargetRowViewModel.TitleIncludes) or
             nameof(TargetRowViewModel.TitleExcludes))
         {
-            _ = ApplyRuleChangesAsync();
+            QueueRuleChanges();
             RefreshCommandState();
         }
     }
@@ -485,6 +505,27 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             _ruleChangeGate.Release();
         }
+    }
+
+    private void QueueRuleChanges(string? successMessage = null)
+    {
+        lock (_ruleTaskSync)
+        {
+            _ruleChangeTail = ApplyRuleChangesAfterAsync(_ruleChangeTail, successMessage);
+        }
+    }
+
+    private async Task ApplyRuleChangesAfterAsync(Task previous, string? successMessage)
+    {
+        try
+        {
+            await previous;
+        }
+        catch
+        {
+        }
+
+        await ApplyRuleChangesAsync(successMessage);
     }
 
     private Task QueueSettingsSaveAsync()

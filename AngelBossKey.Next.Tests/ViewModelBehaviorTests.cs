@@ -2,6 +2,7 @@ using AngelBossKey.Next.App.ViewModels;
 using AngelBossKey.Next.App.Services;
 using AngelBossKey.Next.Core.Abstractions;
 using AngelBossKey.Next.Core.Models;
+using AngelBossKey.Next.Core.Services;
 using AngelBossKey.Next.Win32;
 
 namespace AngelBossKey.Next.Tests;
@@ -126,6 +127,63 @@ public sealed class ViewModelBehaviorTests
         }
     }
 
+    [Fact]
+    public async Task WindowStateMonitor_ContinuesAfterATransientFailure()
+    {
+        var controller = new FakeVisibilityController { FailFirstSelfCheck = true };
+        using var monitor = new WindowStateMonitor(
+            controller,
+            NullDiagnosticLog.Instance,
+            TimeSpan.FromMilliseconds(10));
+
+        monitor.Start();
+        await controller.SecondSelfCheckReached.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.True(controller.SelfCheckCalls >= 2);
+    }
+
+    [Fact]
+    public async Task FlushSettings_WaitsForQueuedRuleChanges()
+    {
+        var controller = new FakeVisibilityController();
+        var store = new BlockingSettingsStore();
+        var viewModel = CreateViewModel(store, controller, CreateSettingsWithTargets("First", "Second"));
+
+        viewModel.Targets[0].Enabled = false;
+        await store.FirstSaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        viewModel.Targets[1].Enabled = false;
+        var flush = viewModel.FlushSettingsAsync();
+        store.ReleaseFirstSave.TrySetResult();
+        await flush.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.All(store.LastSaved!.Targets, target => Assert.False(target.Enabled));
+    }
+
+    [Fact]
+    public void RefreshPathValidity_RaisesTheCurrentPathState()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var row = new TargetRowViewModel(new TargetRule
+            {
+                DisplayName = "Temporary",
+                ExecutablePath = path
+            });
+            Assert.True(row.IsPathValid);
+
+            File.Delete(path);
+
+            Assert.True(row.RefreshPathValidity());
+            Assert.False(row.IsPathValid);
+            Assert.False(row.EffectiveEnabled);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static MainWindowViewModel CreateViewModel(
         ISettingsStore settingsStore,
         FakeVisibilityController controller,
@@ -165,6 +223,30 @@ public sealed class ViewModelBehaviorTests
         }
     }
 
+    private sealed class BlockingSettingsStore : ISettingsStore
+    {
+        private int _saveCalls;
+        public TaskCompletionSource FirstSaveStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstSave { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public AppSettings? LastSaved { get; private set; }
+
+        public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AppSettings());
+
+        public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _saveCalls) == 1)
+            {
+                FirstSaveStarted.TrySetResult();
+                await ReleaseFirstSave.Task.WaitAsync(cancellationToken);
+            }
+
+            LastSaved = settings;
+        }
+    }
+
     private sealed class FakeStartupRegistration : IStartupRegistration
     {
         public bool IsEnabledFor(string executablePath) => false;
@@ -179,6 +261,10 @@ public sealed class ViewModelBehaviorTests
         public int RestoreCalls { get; private set; }
         public int UpdateCalls { get; private set; }
         public IReadOnlyCollection<TargetRule>? LastTargets { get; private set; }
+        public bool FailFirstSelfCheck { get; init; }
+        public int SelfCheckCalls { get; private set; }
+        public TaskCompletionSource SecondSelfCheckReached { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public event EventHandler? StateChanged;
 
         public Task<VisibilityOperationResult> HideAsync(
@@ -206,8 +292,20 @@ public sealed class ViewModelBehaviorTests
             return Task.FromResult(new VisibilityOperationResult());
         }
 
-        public Task<VisibilityOperationResult> SelfCheckAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new VisibilityOperationResult());
+        public Task<VisibilityOperationResult> SelfCheckAsync(CancellationToken cancellationToken = default)
+        {
+            SelfCheckCalls++;
+            if (FailFirstSelfCheck && SelfCheckCalls == 1)
+            {
+                throw new IOException("Transient self-check failure");
+            }
+            if (SelfCheckCalls >= 2)
+            {
+                SecondSelfCheckReached.TrySetResult();
+            }
+
+            return Task.FromResult(new VisibilityOperationResult());
+        }
 
         public Task<bool> TryHideNewWindowAsync(long handle, CancellationToken cancellationToken = default) =>
             Task.FromResult(false);

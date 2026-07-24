@@ -4,7 +4,8 @@ namespace AngelBossKey.Next.App.Services;
 
 public sealed class WindowStateMonitor(
     IWindowVisibilityController visibilityController,
-    IDiagnosticLog diagnosticLog) : IDisposable
+    IDiagnosticLog diagnosticLog,
+    TimeSpan? interval = null) : IDisposable
 {
     private readonly CancellationTokenSource _cancellation = new();
     private Task? _monitorTask;
@@ -23,7 +24,7 @@ public sealed class WindowStateMonitor(
 
     private async Task MonitorAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        using var timer = new PeriodicTimer(interval ?? TimeSpan.FromSeconds(30));
         try
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))

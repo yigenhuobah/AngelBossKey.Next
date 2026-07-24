@@ -26,6 +26,12 @@ public partial class MainWindow : Window
         base.OnClosing(e);
     }
 
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        _viewModel.RefreshPathValidity();
+    }
+
     private async void AddTarget_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new WindowPickerDialog(_windowCatalog) { Owner = this };
