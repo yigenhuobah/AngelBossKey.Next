@@ -14,6 +14,7 @@ public sealed class SceneRowViewModel : ObservableObject
     private bool _enableLowLevelMouseHook;
     private int _cooldownMilliseconds;
     private List<TargetRule> _targets;
+    private List<WorkspaceLaunchItem> _launchItems;
 
     public SceneRowViewModel(SceneProfile scene)
     {
@@ -23,6 +24,7 @@ public sealed class SceneRowViewModel : ObservableObject
         _mode = scene.Mode;
         _privacyShellMode = scene.PrivacyShellMode;
         _targets = [.. scene.Targets];
+        _launchItems = [.. scene.LaunchItems];
         _idleMinutes = scene.Automation.IdleMinutes;
         _mouseTrigger = scene.Automation.MouseTrigger;
         _enableLowLevelMouseHook = scene.Automation.EnableLowLevelMouseHook;
@@ -72,6 +74,8 @@ public sealed class SceneRowViewModel : ObservableObject
 
     public IReadOnlyList<TargetRule> Targets => _targets;
     public void SetTargets(IEnumerable<TargetRule> targets) => _targets = [.. targets];
+    public IReadOnlyList<WorkspaceLaunchItem> LaunchItems => _launchItems;
+    public void SetLaunchItems(IEnumerable<WorkspaceLaunchItem> items) => _launchItems = [.. items];
     public AutomationSettings ToAutomation() => new()
     {
         IdleMinutes = IdleMinutes,
@@ -87,6 +91,7 @@ public sealed class SceneRowViewModel : ObservableObject
         Mode = Mode,
         PrivacyShellMode = PrivacyShellMode,
         Targets = [.. _targets],
+        LaunchItems = [.. _launchItems],
         Automation = ToAutomation()
     };
 }

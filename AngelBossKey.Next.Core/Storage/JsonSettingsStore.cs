@@ -13,7 +13,7 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
         try
         {
             var settings = await AtomicJsonStore.ReadAsync<AppSettings>(path, cancellationToken);
-            if (settings is null || settings.SchemaVersion is < 1 or > 7)
+            if (settings is null || settings.SchemaVersion is < 1 or > 8)
             {
                 return CreateDefaults();
             }
@@ -27,6 +27,8 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
                     Hotkey = scene.Hotkey ?? new HotkeyGesture(),
                     Targets = NormalizeTargets(scene.Targets),
                     Automation = NormalizeAutomation(scene.Automation),
+                    LaunchItems = NormalizeLaunchItems(scene.LaunchItems),
+                    Mode = Enum.IsDefined(scene.Mode) ? scene.Mode : SceneMode.HideWindows,
                     PrivacyShellMode = Enum.IsDefined(scene.PrivacyShellMode)
                         ? scene.PrivacyShellMode
                         : PrivacyDesktopShellMode.FullExplorer
@@ -67,7 +69,7 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
 
             return settings with
             {
-                SchemaVersion = 7,
+                SchemaVersion = 8,
                 Hotkey = scenes.First(scene => scene.Id == activeSceneId).Hotkey,
                 Targets = [.. scenes.First(scene => scene.Id == activeSceneId).Targets],
                 Scenes = scenes,
@@ -116,14 +118,47 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
     private static AutomationSettings NormalizeAutomation(AutomationSettings? automation)
     {
         automation ??= new AutomationSettings();
+        var mouseTrigger = Enum.IsDefined(automation.MouseTrigger)
+            ? automation.MouseTrigger
+            : MouseAutomationTrigger.None;
         return automation with
         {
             IdleMinutes = Math.Clamp(automation.IdleMinutes, 0, 1440),
             CooldownMilliseconds = Math.Clamp(automation.CooldownMilliseconds, 250, 60_000),
             MouseTrigger = automation.EnableLowLevelMouseHook
-                ? automation.MouseTrigger
+                ? mouseTrigger
                 : MouseAutomationTrigger.None
         };
+    }
+
+    private static List<WorkspaceLaunchItem> NormalizeLaunchItems(
+        IEnumerable<WorkspaceLaunchItem>? launchItems)
+    {
+        var usedIds = new HashSet<Guid>();
+        return (launchItems ?? [])
+            .Where(item => item is not null && !string.IsNullOrWhiteSpace(item.ExecutablePath))
+            .Select(item =>
+            {
+                var id = item.Id;
+                if (id == Guid.Empty || !usedIds.Add(id))
+                {
+                    id = Guid.NewGuid();
+                    usedIds.Add(id);
+                }
+                var path = item.ExecutablePath.Trim();
+                var name = string.IsNullOrWhiteSpace(item.DisplayName)
+                    ? Path.GetFileNameWithoutExtension(path)
+                    : item.DisplayName.Trim();
+                return item with
+                {
+                    Id = id,
+                    DisplayName = name,
+                    ExecutablePath = path,
+                    Arguments = item.Arguments?.Trim() ?? string.Empty,
+                    WorkingDirectory = item.WorkingDirectory?.Trim() ?? string.Empty
+                };
+            })
+            .ToList();
     }
 
     private static AppSettings CreateDefaults()

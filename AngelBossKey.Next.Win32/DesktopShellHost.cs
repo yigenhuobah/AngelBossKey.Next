@@ -1,4 +1,5 @@
 using AngelBossKey.Next.Core.Abstractions;
+using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Core.Services;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -53,6 +54,16 @@ internal sealed class DesktopShellHost(
         }
     }
 
+    internal bool HasWorkspace
+    {
+        get { lock (_sync) return _jobHandle != 0; }
+    }
+
+    internal IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications()
+    {
+        lock (_sync) return DesktopJobProcess.GetApplications(_jobHandle, _applicationPath);
+    }
+
     internal void Reset()
     {
         lock (_sync)
@@ -72,14 +83,17 @@ internal sealed class DesktopShellHost(
         }
     }
 
-    internal (bool Success, string Message) EnsureReady(CancellationToken cancellationToken)
+    internal (bool Success, string Message) EnsureReady(
+        Guid sceneId,
+        CancellationToken cancellationToken)
     {
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            var hadWorkspace = _jobHandle != 0;
             ReleaseExitedProcessHandle();
             if (FindUsableWindow() != 0) return (true, "隐私桌面 Shell 已就绪。");
-            if (_processHandle == 0 && !StartShell(out var error))
+            if (_processHandle == 0 && !StartShell(sceneId, out var error))
             {
                 return (false, error);
             }
@@ -105,13 +119,13 @@ internal sealed class DesktopShellHost(
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                StopShell();
+                StopShell(closeWorkspace: !hadWorkspace);
                 throw;
             }
 
             var message = "隐私桌面 Shell 未能创建可见窗口，已取消切换。";
             _log.Warning("desktop.shell", $"ready=false; pid={_processId}");
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return (false, message);
         }
     }
@@ -130,7 +144,41 @@ internal sealed class DesktopShellHost(
     internal static string BuildShellCommandLine(string applicationPath, uint threadId) =>
         $"\"{applicationPath}\" --privacy-shell {threadId}";
 
-    private bool StartShell(out string error)
+    internal static string BuildShellCommandLine(
+        string applicationPath,
+        uint threadId,
+        Guid sceneId) =>
+        $"{BuildShellCommandLine(applicationPath, threadId)} {sceneId:D}";
+
+    internal (int Started, int Failed) LaunchItems(IEnumerable<WorkspaceLaunchItem> launchItems)
+    {
+        lock (_sync)
+        {
+            var started = 0;
+            var failed = 0;
+            foreach (var item in launchItems.Where(item => item.Enabled))
+            {
+                if (!DesktopJobProcess.TryStart(
+                    _jobHandle,
+                    desktopName,
+                    item.ExecutablePath,
+                    item.Arguments,
+                    item.WorkingDirectory,
+                    out var handle,
+                    out _,
+                    out _))
+                {
+                    failed++;
+                    continue;
+                }
+                NativeMethods.CloseHandle(handle);
+                started++;
+            }
+            return (started, failed);
+        }
+    }
+
+    private bool StartShell(Guid sceneId, out string error)
     {
         if (!File.Exists(_applicationPath))
         {
@@ -138,6 +186,7 @@ internal sealed class DesktopShellHost(
             return false;
         }
 
+        var hadWorkspace = _jobHandle != 0;
         if (!EnsureJob(out error)) return false;
 
         var startup = new NativeMethods.StartupInfo
@@ -145,7 +194,10 @@ internal sealed class DesktopShellHost(
             Size = (uint)Marshal.SizeOf<NativeMethods.StartupInfo>(),
             Desktop = $"winsta0\\{desktopName}"
         };
-        var commandLine = new StringBuilder(BuildShellCommandLine(_applicationPath, ownerThreadId));
+        var commandLine = new StringBuilder(BuildShellCommandLine(
+            _applicationPath,
+            ownerThreadId,
+            sceneId));
         if (!NativeMethods.CreateProcess(
                 _applicationPath,
                 commandLine,
@@ -159,6 +211,7 @@ internal sealed class DesktopShellHost(
                 out var process))
         {
             error = $"无法启动隐私桌面 Shell（错误 {Marshal.GetLastWin32Error()}）。";
+            if (!hadWorkspace) StopShell();
             return false;
         }
 
@@ -169,14 +222,14 @@ internal sealed class DesktopShellHost(
             error = $"无法隔离隐私桌面进程（错误 {Marshal.GetLastWin32Error()}）。";
             NativeMethods.TerminateProcess(process.Process, 1);
             NativeMethods.CloseHandle(process.Thread);
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return false;
         }
         if (NativeMethods.ResumeThread(process.Thread) == uint.MaxValue)
         {
             error = $"无法启动隐私桌面线程（错误 {Marshal.GetLastWin32Error()}）。";
             NativeMethods.CloseHandle(process.Thread);
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return false;
         }
         NativeMethods.CloseHandle(process.Thread);
@@ -292,10 +345,23 @@ internal sealed class DesktopShellHost(
         _processId = 0;
     }
 
-    private void StopShell()
+    private void StopShell(bool closeWorkspace = true)
     {
         _monitorShutdown?.Cancel();
         _monitorShutdown = null;
+        if (!closeWorkspace)
+        {
+            if (_processHandle != 0 &&
+                NativeMethods.WaitForSingleObject(_processHandle, 0) == NativeMethods.WaitTimeout)
+            {
+                NativeMethods.TerminateProcess(_processHandle, 0);
+                NativeMethods.WaitForSingleObject(_processHandle, 750);
+            }
+            if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
+            _processHandle = 0;
+            _processId = 0;
+            return;
+        }
         if (_processHandle != 0 &&
             NativeMethods.WaitForSingleObject(_processHandle, 750) == NativeMethods.WaitTimeout &&
             _jobHandle == 0)

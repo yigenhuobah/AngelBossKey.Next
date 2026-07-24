@@ -88,9 +88,14 @@ public interface IElevatedWindowBroker
 public interface IPrivacyDesktopService : IDisposable
 {
     bool IsActive { get; }
+    bool HasWorkspace { get; }
+    int RunningApplicationCount { get; }
+    PrivacyDesktopShellMode? ActiveShellMode { get; }
     event EventHandler? StateChanged;
     Task<(bool Success, string Message)> EnterAsync(
-        PrivacyDesktopShellMode shellMode,
+        PrivacyDesktopLaunchRequest request,
         CancellationToken cancellationToken = default);
     Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default);
+    Task<(bool Success, string Message)> CloseWorkspaceAsync(CancellationToken cancellationToken = default);
+    IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications();
 }

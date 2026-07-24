@@ -44,9 +44,26 @@ public partial class App : System.Windows.Application
             uint.TryParse(e.Args[privacyShellIndex + 1], out var ownerThreadId))
         {
             ShutdownMode = ShutdownMode.OnMainWindowClose;
-            var shell = new PrivacyShellWindow(ownerThreadId);
+            var sceneId = e.Args.Length > privacyShellIndex + 2 &&
+                Guid.TryParse(e.Args[privacyShellIndex + 2], out var parsedSceneId)
+                ? parsedSceneId
+                : Guid.Empty;
+            var shell = new PrivacyShellWindow(ownerThreadId, sceneId);
             MainWindow = shell;
             shell.Show();
+            return;
+        }
+
+        var privacyToolbarIndex = Array.FindIndex(e.Args, argument =>
+            string.Equals(argument, "--privacy-toolbar", StringComparison.OrdinalIgnoreCase));
+        if (privacyToolbarIndex >= 0 && e.Args.Length > privacyToolbarIndex + 2 &&
+            uint.TryParse(e.Args[privacyToolbarIndex + 1], out var toolbarOwnerThreadId) &&
+            Guid.TryParse(e.Args[privacyToolbarIndex + 2], out var toolbarSceneId))
+        {
+            ShutdownMode = ShutdownMode.OnMainWindowClose;
+            var toolbar = new PrivacyToolbarWindow(toolbarOwnerThreadId, toolbarSceneId);
+            MainWindow = toolbar;
+            toolbar.Show();
             return;
         }
 
@@ -149,7 +166,20 @@ public partial class App : System.Windows.Application
         _trayIcon = new TrayIconService(
             () => Dispatcher.Invoke(ShowMainWindow),
             () => Dispatcher.InvokeAsync(ToggleVisibilityAsync),
-            () => Dispatcher.InvokeAsync(RequestExitAsync));
+            () => Dispatcher.InvokeAsync(RequestExitAsync),
+            sceneId => Dispatcher.InvokeAsync(() =>
+                _ = DispatchOperationAsync(
+                    () => _viewModel.ActivateSceneAsync(sceneId),
+                    "tray.scene")));
+        _viewModel.SceneMenuChanged += (_, _) => Dispatcher.Invoke(RefreshTrayScenes);
+        _viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.SelectedScene))
+            {
+                Dispatcher.Invoke(RefreshTrayScenes);
+            }
+        };
+        RefreshTrayScenes();
         _visibilityController.StateChanged += (_, _) =>
             Dispatcher.Invoke(() => _trayIcon?.Update(_visibilityController.IsHidden));
         _privacyDesktop.StateChanged += (_, _) =>
@@ -188,6 +218,17 @@ public partial class App : System.Windows.Application
         if (_isExiting)
         {
             return;
+        }
+
+        if (_privacyDesktop?.HasWorkspace == true && _privacyDesktop.RunningApplicationCount > 0)
+        {
+            var count = _privacyDesktop.RunningApplicationCount;
+            var choice = System.Windows.MessageBox.Show(
+                $"独立工作区仍有 {count} 个程序。退出会关闭它们，请先保存工作。是否继续退出？",
+                "退出天使老板键 Next",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (choice != MessageBoxResult.Yes) return;
         }
 
         _isExiting = true;
@@ -258,6 +299,16 @@ public partial class App : System.Windows.Application
         }
 
         _mainWindow.Activate();
+    }
+
+    private void RefreshTrayScenes()
+    {
+        if (_trayIcon is null || _viewModel is null) return;
+        _trayIcon.UpdateScenes(
+            _viewModel.Scenes.Select(scene => new TraySceneEntry(
+                scene.Id,
+                $"{scene.Name}  [{scene.HotkeyText}]")),
+            _viewModel.SelectedScene.Id);
     }
 
     private nint WindowProcedure(nint window, int message, nint wParam, nint lParam, ref bool handled)

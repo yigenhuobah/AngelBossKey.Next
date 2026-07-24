@@ -2,7 +2,7 @@ namespace AngelBossKey.Next.Core.Models;
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 7;
+    public int SchemaVersion { get; init; } = 8;
     // Kept for lossless migration from v0.1/v0.2 settings.
     public HotkeyGesture Hotkey { get; init; } = new();
     public List<TargetRule> Targets { get; init; } = [];
@@ -63,4 +63,25 @@ public sealed record SceneProfile
     public AutomationSettings Automation { get; init; } = new();
     public SceneMode Mode { get; init; }
     public PrivacyDesktopShellMode PrivacyShellMode { get; init; } = PrivacyDesktopShellMode.FullExplorer;
+    public List<WorkspaceLaunchItem> LaunchItems { get; init; } = [];
+}
+
+public sealed record WorkspaceLaunchItem
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string DisplayName { get; init; } = string.Empty;
+    public string ExecutablePath { get; init; } = string.Empty;
+    public string Arguments { get; init; } = string.Empty;
+    public string WorkingDirectory { get; init; } = string.Empty;
+    public bool Enabled { get; init; } = true;
+}
+
+public sealed record WorkspaceProcessInfo(string DisplayName, string ExecutablePath);
+
+public sealed record PrivacyDesktopLaunchRequest
+{
+    public Guid SceneId { get; init; }
+    public string SceneName { get; init; } = string.Empty;
+    public PrivacyDesktopShellMode ShellMode { get; init; } = PrivacyDesktopShellMode.FullExplorer;
+    public IReadOnlyList<WorkspaceLaunchItem> LaunchItems { get; init; } = [];
 }

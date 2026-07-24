@@ -56,6 +56,16 @@ public sealed class AutomationBehaviorTests
     }
 
     [Fact]
+    public void DesktopJobProcess_BuildsDirectCommandLineWithoutShell()
+    {
+        Assert.Equal(
+            "\"C:\\Program Files\\Editor\\editor.exe\" --profile work",
+            DesktopJobProcess.BuildCommandLine(
+                @"C:\Program Files\Editor\editor.exe",
+                "  --profile work  "));
+    }
+
+    [Fact]
     public async Task DesktopShell_RestartsAfterUnexpectedExitWithoutSwitchingDesktop()
     {
         var desktopName = $"AngelBossKey.Next.Test.{Guid.NewGuid():N}";
@@ -76,7 +86,7 @@ public sealed class AutomationBehaviorTests
             var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             shell.Exited += (_, _) => exited.TrySetResult();
 
-            var result = shell.EnsureReady(CancellationToken.None);
+            var result = shell.EnsureReady(Guid.NewGuid(), CancellationToken.None);
 
             Assert.True(result.Success, result.Message);
             using (var process = Process.GetProcessById((int)shell.ProcessId))
@@ -85,10 +95,47 @@ public sealed class AutomationBehaviorTests
             }
             await exited.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
-            var restarted = shell.EnsureReady(CancellationToken.None);
+            var restarted = shell.EnsureReady(Guid.NewGuid(), CancellationToken.None);
 
             Assert.True(restarted.Success, restarted.Message);
             Assert.NotEqual(0u, shell.ProcessId);
+        }
+        finally
+        {
+            NativeMethods.CloseDesktop(desktop);
+        }
+    }
+
+    [Fact]
+    public async Task DesktopShell_CancelledRestartPreservesExistingWorkspaceJob()
+    {
+        var desktopName = $"AngelBossKey.Next.Test.{Guid.NewGuid():N}";
+        var access = NativeMethods.DesktopReadObjects |
+            NativeMethods.DesktopCreateWindow |
+            NativeMethods.DesktopWriteObjects |
+            NativeMethods.DesktopSwitchDesktop;
+        var desktop = NativeMethods.CreateDesktop(desktopName, 0, 0, 0, access, 0);
+        Assert.NotEqual(0, desktop);
+
+        try
+        {
+            using var shell = new DesktopShellHost(
+                desktop,
+                desktopName,
+                NativeMethods.GetCurrentThreadId(),
+                applicationPath: Path.Combine(AppContext.BaseDirectory, "AngelBossKey.Next.exe"));
+            var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            shell.Exited += (_, _) => exited.TrySetResult();
+            var started = shell.EnsureReady(Guid.NewGuid(), CancellationToken.None);
+            Assert.True(started.Success, started.Message);
+            using (var process = Process.GetProcessById((int)shell.ProcessId)) process.Kill();
+            await exited.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() =>
+                shell.EnsureReady(Guid.NewGuid(), cancellation.Token));
+            Assert.True(shell.HasWorkspace);
         }
         finally
         {
@@ -136,7 +183,7 @@ public sealed class AutomationBehaviorTests
                 applicationPath: Path.Combine(AppContext.BaseDirectory, "AngelBossKey.Next.exe"));
             var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             shell.Exited += (_, _) => exited.TrySetResult();
-            var started = shell.EnsureReady(CancellationToken.None);
+            var started = shell.EnsureReady(Guid.NewGuid(), CancellationToken.None);
             Assert.True(started.Success, started.Message);
 
             Assert.True(PrivacyDesktopShellBridge.RequestReturn(ownerThreadId, shell.ShellWindow));

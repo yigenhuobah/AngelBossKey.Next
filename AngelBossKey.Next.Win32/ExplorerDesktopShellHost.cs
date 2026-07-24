@@ -1,4 +1,5 @@
 using AngelBossKey.Next.Core.Abstractions;
+using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Core.Services;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -9,8 +10,10 @@ namespace AngelBossKey.Next.Win32;
 internal sealed class ExplorerDesktopShellHost(
     nint desktop,
     string desktopName,
+    uint ownerThreadId = 0,
     IDiagnosticLog? diagnosticLog = null,
-    string? explorerPath = null) : IDisposable
+    string? explorerPath = null,
+    string? applicationPath = null) : IDisposable
 {
     private const string TaskbarClass = "Shell_TrayWnd";
     private const string DesktopClass = "Progman";
@@ -18,9 +21,12 @@ internal sealed class ExplorerDesktopShellHost(
     private readonly IDiagnosticLog _log = diagnosticLog ?? NullDiagnosticLog.Instance;
     private readonly string _explorerPath = explorerPath ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+    private readonly string _applicationPath = applicationPath ?? Environment.ProcessPath!;
     private nint _jobHandle;
     private nint _processHandle;
     private uint _processId;
+    private nint _toolbarProcessHandle;
+    private uint _toolbarProcessId;
     private CancellationTokenSource? _monitorShutdown;
     private bool _disposed;
 
@@ -39,6 +45,22 @@ internal sealed class ExplorerDesktopShellHost(
         get
         {
             lock (_sync) return IsReadyCore();
+        }
+    }
+
+    internal bool HasWorkspace
+    {
+        get { lock (_sync) return _jobHandle != 0; }
+    }
+
+    internal IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications()
+    {
+        lock (_sync)
+        {
+            return DesktopJobProcess.GetApplications(
+                _jobHandle,
+                _explorerPath,
+                _applicationPath);
         }
     }
 
@@ -64,15 +86,31 @@ internal sealed class ExplorerDesktopShellHost(
         }
     }
 
-    internal (bool Success, string Message) EnsureReady(CancellationToken cancellationToken)
+    internal (bool Success, string Message) EnsureReady(
+        Guid sceneId,
+        CancellationToken cancellationToken)
     {
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            var hadWorkspace = _jobHandle != 0;
             ReleaseExitedProcessHandle();
             if (TryAdoptReadyShell())
             {
-                StartProcessMonitor(_processHandle, _processId);
+                try
+                {
+                    if (!EnsureToolbarReady(sceneId, cancellationToken, out var toolbarError))
+                    {
+                        StopShell(closeWorkspace: !hadWorkspace);
+                        return (false, toolbarError);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    StopShell(closeWorkspace: !hadWorkspace);
+                    throw;
+                }
+                StartProcessMonitor(_processHandle, _processId, _toolbarProcessHandle);
                 return (true, "完整 Explorer 桌面已就绪。");
             }
             if (_processHandle == 0 && !StartExplorer(out var error)) return (false, error);
@@ -85,7 +123,12 @@ internal sealed class ExplorerDesktopShellHost(
                     cancellationToken.ThrowIfCancellationRequested();
                     if (TryAdoptReadyShell())
                     {
-                        StartProcessMonitor(_processHandle, _processId);
+                        if (!EnsureToolbarReady(sceneId, cancellationToken, out var toolbarError))
+                        {
+                            StopShell(closeWorkspace: !hadWorkspace);
+                            return (false, toolbarError);
+                        }
+                        StartProcessMonitor(_processHandle, _processId, _toolbarProcessHandle);
                         _log.Info("desktop.explorer", $"ready=true; pid={_processId}");
                         return (true, "完整 Explorer 桌面已就绪。");
                     }
@@ -94,13 +137,13 @@ internal sealed class ExplorerDesktopShellHost(
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                StopShell();
+                StopShell(closeWorkspace: !hadWorkspace);
                 throw;
             }
 
             var message = "Explorer 未能在独立桌面创建完整任务栏和桌面。";
             _log.Warning("desktop.explorer", $"ready=false; launcherPid={_processId}");
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return (false, message);
         }
     }
@@ -111,6 +154,44 @@ internal sealed class ExplorerDesktopShellHost(
         {
             if (_disposed) return;
             StopShell();
+        }
+    }
+
+    internal void Reset()
+    {
+        lock (_sync)
+        {
+            if (_disposed) return;
+            CloseDesktopWindows();
+            StopShell();
+        }
+    }
+
+    internal (int Started, int Failed) LaunchItems(IEnumerable<WorkspaceLaunchItem> launchItems)
+    {
+        lock (_sync)
+        {
+            var started = 0;
+            var failed = 0;
+            foreach (var item in launchItems.Where(item => item.Enabled))
+            {
+                if (!DesktopJobProcess.TryStart(
+                    _jobHandle,
+                    desktopName,
+                    item.ExecutablePath,
+                    item.Arguments,
+                    item.WorkingDirectory,
+                    out var handle,
+                    out _,
+                    out _))
+                {
+                    failed++;
+                    continue;
+                }
+                NativeMethods.CloseHandle(handle);
+                started++;
+            }
+            return (started, failed);
         }
     }
 
@@ -133,6 +214,7 @@ internal sealed class ExplorerDesktopShellHost(
             return false;
         }
 
+        var hadWorkspace = _jobHandle != 0;
         if (!EnsureJob(out error)) return false;
 
         var startup = new NativeMethods.StartupInfo
@@ -154,7 +236,7 @@ internal sealed class ExplorerDesktopShellHost(
                 out var process))
         {
             error = $"无法在独立桌面启动 Explorer（错误 {Marshal.GetLastWin32Error()}）。";
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return false;
         }
 
@@ -165,14 +247,14 @@ internal sealed class ExplorerDesktopShellHost(
             error = $"无法隔离独立桌面 Explorer（错误 {Marshal.GetLastWin32Error()}）。";
             NativeMethods.TerminateProcess(process.Process, 1);
             NativeMethods.CloseHandle(process.Thread);
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return false;
         }
         if (NativeMethods.ResumeThread(process.Thread) == uint.MaxValue)
         {
             error = $"无法启动独立桌面 Explorer 线程（错误 {Marshal.GetLastWin32Error()}）。";
             NativeMethods.CloseHandle(process.Thread);
-            StopShell();
+            StopShell(closeWorkspace: !hadWorkspace);
             return false;
         }
         NativeMethods.CloseHandle(process.Thread);
@@ -215,6 +297,67 @@ internal sealed class ExplorerDesktopShellHost(
         NativeMethods.CloseHandle(_jobHandle);
         _jobHandle = 0;
         return false;
+    }
+
+    private bool EnsureToolbarReady(
+        Guid sceneId,
+        CancellationToken cancellationToken,
+        out string error)
+    {
+        ReleaseExitedToolbarHandle();
+        if (IsProcessRunning(_toolbarProcessHandle) && FindVisibleWindow(_toolbarProcessId) != 0)
+        {
+            error = string.Empty;
+            return true;
+        }
+        if (!File.Exists(_applicationPath))
+        {
+            error = "找不到当前程序，无法启动独立桌面返回工具条。";
+            return false;
+        }
+        if (!DesktopJobProcess.TryStart(
+            _jobHandle,
+            desktopName,
+            _applicationPath,
+            $"--privacy-toolbar {ownerThreadId} {sceneId:D}",
+            Path.GetDirectoryName(_applicationPath),
+            out _toolbarProcessHandle,
+            out _toolbarProcessId,
+            out error))
+        {
+            return false;
+        }
+
+        var timeout = Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromSeconds(6))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsProcessRunning(_toolbarProcessHandle)) break;
+            if (FindVisibleWindow(_toolbarProcessId) != 0)
+            {
+                _log.Info("desktop.toolbar", $"ready=true; pid={_toolbarProcessId}");
+                error = string.Empty;
+                return true;
+            }
+            Thread.Sleep(50);
+        }
+
+        error = "独立桌面返回工具条未能创建可见窗口。";
+        return false;
+    }
+
+    private nint FindVisibleWindow(uint processId)
+    {
+        nint found = 0;
+        NativeMethods.EnumDesktopWindows(desktop, (window, _) =>
+        {
+            if (!NativeMethods.IsWindowVisible(window)) return true;
+            NativeMethods.GetWindowThreadProcessId(window, out var ownerProcessId);
+            if (ownerProcessId != processId) return true;
+            found = window;
+            return false;
+        }, 0);
+        return found;
     }
 
     private bool TryAdoptReadyShell()
@@ -265,19 +408,21 @@ internal sealed class ExplorerDesktopShellHost(
     }
 
     private bool IsReadyCore() =>
-        !_disposed && IsProcessRunning(_processHandle) && FindCompleteShellProcess() == _processId;
+        !_disposed && IsProcessRunning(_processHandle) && FindCompleteShellProcess() == _processId &&
+        IsProcessRunning(_toolbarProcessHandle) && FindVisibleWindow(_toolbarProcessId) != 0;
 
-    private void StartProcessMonitor(nint processHandle, uint processId)
+    private void StartProcessMonitor(nint processHandle, uint processId, nint toolbarProcessHandle)
     {
         _monitorShutdown?.Cancel();
         var shutdown = new CancellationTokenSource();
         _monitorShutdown = shutdown;
-        _ = MonitorProcessAsync(processHandle, processId, shutdown.Token);
+        _ = MonitorProcessAsync(processHandle, processId, toolbarProcessHandle, shutdown.Token);
     }
 
     private async Task MonitorProcessAsync(
         nint processHandle,
         uint processId,
+        nint toolbarProcessHandle,
         CancellationToken cancellationToken)
     {
         try
@@ -289,7 +434,8 @@ internal sealed class ExplorerDesktopShellHost(
                 {
                     if (cancellationToken.IsCancellationRequested || _disposed ||
                         processHandle != _processHandle) return;
-                    if (IsProcessRunning(processHandle) && FindCompleteShellProcess() == processId) continue;
+                    if (IsProcessRunning(processHandle) && FindCompleteShellProcess() == processId &&
+                        IsProcessRunning(toolbarProcessHandle)) continue;
                 }
 
                 _log.Warning("desktop.explorer.exit", $"pid={processId}");
@@ -329,10 +475,42 @@ internal sealed class ExplorerDesktopShellHost(
         _processId = 0;
     }
 
-    private void StopShell()
+    private void ReleaseExitedToolbarHandle()
+    {
+        if (_toolbarProcessHandle == 0 || IsProcessRunning(_toolbarProcessHandle)) return;
+        NativeMethods.CloseHandle(_toolbarProcessHandle);
+        _toolbarProcessHandle = 0;
+        _toolbarProcessId = 0;
+    }
+
+    private void StopShell(bool closeWorkspace = true)
     {
         _monitorShutdown?.Cancel();
         _monitorShutdown = null;
+        if (!closeWorkspace)
+        {
+            if (_toolbarProcessHandle != 0 && IsProcessRunning(_toolbarProcessHandle))
+            {
+                NativeMethods.TerminateProcess(_toolbarProcessHandle, 0);
+                NativeMethods.WaitForSingleObject(_toolbarProcessHandle, 750);
+            }
+            if (_processHandle != 0 && IsProcessRunning(_processHandle))
+            {
+                CloseOwnedShellWindows();
+                if (NativeMethods.WaitForSingleObject(_processHandle, 750) == NativeMethods.WaitTimeout)
+                {
+                    NativeMethods.TerminateProcess(_processHandle, 0);
+                    NativeMethods.WaitForSingleObject(_processHandle, 750);
+                }
+            }
+            if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
+            if (_toolbarProcessHandle != 0) NativeMethods.CloseHandle(_toolbarProcessHandle);
+            _processHandle = 0;
+            _processId = 0;
+            _toolbarProcessHandle = 0;
+            _toolbarProcessId = 0;
+            return;
+        }
         if (_processHandle != 0 && IsProcessRunning(_processHandle))
         {
             CloseOwnedShellWindows();
@@ -350,8 +528,11 @@ internal sealed class ExplorerDesktopShellHost(
             NativeMethods.WaitForSingleObject(_processHandle, 750);
         }
         if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
+        if (_toolbarProcessHandle != 0) NativeMethods.CloseHandle(_toolbarProcessHandle);
         _processHandle = 0;
         _processId = 0;
+        _toolbarProcessHandle = 0;
+        _toolbarProcessId = 0;
     }
 
     private static bool IsProcessRunning(nint processHandle) =>

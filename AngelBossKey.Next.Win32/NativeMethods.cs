@@ -407,6 +407,13 @@ internal static partial class NativeMethods
     internal static partial bool AssignProcessToJobObject(nint job, nint process);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsProcessInJob(
+        nint process,
+        nint job,
+        [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static partial uint ResumeThread(nint thread);
 
     [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]

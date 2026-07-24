@@ -46,6 +46,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Border Width="34" Height="34" CornerRadius="5" Background="#58B99B" Margin="0,0,12,0">
@@ -62,6 +63,13 @@
                     <TextBlock Text="返回原桌面" />
                 </StackPanel>
             </Button>
+            <Button Grid.Column="2" Style="{StaticResource ShellButton}" Click="CloseWorkspace_Click"
+                    AutomationProperties.Name="关闭独立工作区" ToolTip="关闭工作区及其中程序">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="16" Margin="0,0,8,0" />
+                    <TextBlock Text="关闭工作区" />
+                </StackPanel>
+            </Button>
         </Grid>
 
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -74,7 +82,8 @@
         </StackPanel>
 
         <Border Grid.Row="2" Background="#1D2321" BorderBrush="#35403C" BorderThickness="0,1,0,0">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <StackPanel x:Name="LauncherPanel" Orientation="Horizontal"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Button Style="{StaticResource ShellButton}" Tag="browse" Click="Launch_Click"
                         AutomationProperties.Name="打开程序" ToolTip="打开程序">
                     <StackPanel Orientation="Horizontal">

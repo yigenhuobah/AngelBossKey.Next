@@ -9,7 +9,7 @@ using System.Windows.Input;
 
 namespace AngelBossKey.Next.App.ViewModels;
 
-public sealed class MainWindowViewModel : ObservableObject
+public sealed partial class MainWindowViewModel : ObservableObject
 {
     private readonly ISettingsStore _settingsStore;
     private readonly IWindowVisibilityController _visibilityController;
@@ -82,9 +82,10 @@ public sealed class MainWindowViewModel : ObservableObject
 
         _selectedScene = Scenes.FirstOrDefault(scene => scene.Id == settings.ActiveSceneId) ?? Scenes[0];
         LoadSelectedTargets();
+        LoadSelectedLaunchItems();
         _settings = settings with
         {
-            SchemaVersion = 7,
+            SchemaVersion = 8,
             Scenes = Scenes.Select(scene => scene.ToModel()).ToList(),
             ActiveSceneId = _selectedScene.Id
         };
@@ -98,12 +99,14 @@ public sealed class MainWindowViewModel : ObservableObject
             _ => RemoveSelectedSceneAsync(),
             _ => Scenes.Count > 1,
             ReportSceneCommandException);
+        InitializeExtendedFeatures();
         _visibilityController.StateChanged += OnOperationStateChanged;
         _privacyDesktop.StateChanged += OnOperationStateChanged;
     }
 
     public ObservableCollection<SceneRowViewModel> Scenes { get; } = [];
     public ObservableCollection<TargetRowViewModel> Targets { get; } = [];
+    public ObservableCollection<LaunchItemRowViewModel> LaunchItems { get; } = [];
     public IReadOnlyList<MouseTriggerOption> MouseTriggerOptions { get; } =
     [
         new(MouseAutomationTrigger.None, "关闭"),
@@ -267,6 +270,7 @@ public sealed class MainWindowViewModel : ObservableObject
             }
 
             Message = $"“{scene.Name}”热键已设置为 {HotkeyFormatter.Format(gesture)}。";
+            SceneMenuChanged?.Invoke(this, EventArgs.Empty);
             RefreshAllState();
             return true;
         }
@@ -300,10 +304,28 @@ public sealed class MainWindowViewModel : ObservableObject
                     return false;
                 }
             }
+            if (_privacyDesktop.HasWorkspace)
+            {
+                if (_privacyDesktop.RunningApplicationCount > 0)
+                {
+                    Message = "独立工作区仍有程序运行。请先返回并使用“关闭工作区”，再切换场景。";
+                    OnPropertyChanged(nameof(SelectedScene));
+                    return false;
+                }
+                var close = await _privacyDesktop.CloseWorkspaceAsync();
+                if (!close.Success)
+                {
+                    Message = close.Message;
+                    OnPropertyChanged(nameof(SelectedScene));
+                    return false;
+                }
+            }
             SaveSelectedTargets();
+            SaveSelectedLaunchItems();
             _selectedScene = scene;
             selectionApplied = true;
             LoadSelectedTargets();
+            LoadSelectedLaunchItems();
             _settings = _settings with { ActiveSceneId = scene.Id };
             _automationService.Configure(scene.ToAutomation());
             await PersistAllAsync();
@@ -318,6 +340,7 @@ public sealed class MainWindowViewModel : ObservableObject
             {
                 _selectedScene = previousScene;
                 LoadSelectedTargets();
+                LoadSelectedLaunchItems();
                 TryConfigureAutomation(previousScene, "scene.select.rollback");
                 UpdateSettingsSnapshot();
             }
@@ -414,7 +437,15 @@ public sealed class MainWindowViewModel : ObservableObject
             _operationSceneId = SelectedScene.Id;
             if (SelectedScene.Mode == SceneMode.PrivacyDesktop)
             {
-                var desktopResult = await _privacyDesktop.EnterAsync(SelectedScene.PrivacyShellMode);
+                // Helper processes read the persisted scene to build their launcher menus.
+                await PersistAllAsync();
+                var desktopResult = await _privacyDesktop.EnterAsync(new PrivacyDesktopLaunchRequest
+                {
+                    SceneId = SelectedScene.Id,
+                    SceneName = SelectedScene.Name,
+                    ShellMode = SelectedScene.PrivacyShellMode,
+                    LaunchItems = LaunchItems.Select(item => item.ToModel()).ToList()
+                });
                 if (desktopResult.Success)
                 {
                     Message = desktopResult.Message;
@@ -504,9 +535,16 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public void RefreshPathValidity()
     {
-        if (!Targets.Any(target => target.RefreshPathValidity())) return;
+        var targetChanged = false;
+        foreach (var target in Targets) targetChanged |= target.RefreshPathValidity();
+        var launchChanged = false;
+        foreach (var item in LaunchItems) launchChanged |= item.RefreshPathValidity();
+        if (!targetChanged && !launchChanged) return;
         RefreshAllState();
-        QueueRuleChanges(_visibilityController.IsHidden ? "程序路径状态已更新，规则已重新应用。" : null);
+        if (targetChanged)
+        {
+            QueueRuleChanges(_visibilityController.IsHidden ? "程序路径状态已更新，规则已重新应用。" : null);
+        }
     }
 
     private async Task<VisibilityOperationResult> RestoreCurrentCoreAsync()
@@ -557,6 +595,7 @@ public sealed class MainWindowViewModel : ObservableObject
             Scenes.Add(scene);
             added = true;
             RemoveSceneCommand.RaiseCanExecuteChanged();
+            SceneMenuChanged?.Invoke(this, EventArgs.Empty);
             if (await SelectSceneAsync(scene)) return;
         }
         catch (Exception exception)
@@ -570,6 +609,7 @@ public sealed class MainWindowViewModel : ObservableObject
             scene.PropertyChanged -= OnScenePropertyChanged;
             Scenes.Remove(scene);
             RemoveSceneCommand.RaiseCanExecuteChanged();
+            SceneMenuChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -594,6 +634,20 @@ public sealed class MainWindowViewModel : ObservableObject
                     return;
                 }
             }
+            if (_privacyDesktop.HasWorkspace)
+            {
+                if (_privacyDesktop.RunningApplicationCount > 0)
+                {
+                    Message = "独立工作区仍有程序运行。请先返回并使用“关闭工作区”，再删除场景。";
+                    return;
+                }
+                var close = await _privacyDesktop.CloseWorkspaceAsync();
+                if (!close.Success)
+                {
+                    Message = close.Message;
+                    return;
+                }
+            }
 
             removed = SelectedScene;
             index = Scenes.IndexOf(removed);
@@ -602,8 +656,10 @@ public sealed class MainWindowViewModel : ObservableObject
             removed.PropertyChanged -= OnScenePropertyChanged;
             Scenes.Remove(removed);
             removalApplied = true;
+            SceneMenuChanged?.Invoke(this, EventArgs.Empty);
             _selectedScene = replacement;
             LoadSelectedTargets();
+            LoadSelectedLaunchItems();
             _automationService.Configure(replacement.ToAutomation());
             await PersistAllAsync();
             OnPropertyChanged(nameof(SelectedScene));
@@ -619,10 +675,12 @@ public sealed class MainWindowViewModel : ObservableObject
                 removed.PropertyChanged += OnScenePropertyChanged;
                 _selectedScene = removed;
                 LoadSelectedTargets();
+                LoadSelectedLaunchItems();
                 TryConfigureAutomation(removed, "scene.remove.rollback");
                 if (removed.Hotkey.IsConfigured) _hotkeyService.TryRegister(removed.Id, removed.Hotkey, out _);
                 UpdateSettingsSnapshot();
                 OnPropertyChanged(nameof(SelectedScene));
+                SceneMenuChanged?.Invoke(this, EventArgs.Empty);
             }
             _diagnosticLog.Error("scene.remove", exception);
             Message = $"删除场景失败，已恢复原场景：{exception.Message}";
@@ -657,6 +715,9 @@ public sealed class MainWindowViewModel : ObservableObject
 
     private void SaveSelectedTargets() => _selectedScene.SetTargets(Targets.Select(target => target.ToModel()));
 
+    private void SaveSelectedLaunchItems() =>
+        _selectedScene.SetLaunchItems(LaunchItems.Select(item => item.ToModel()));
+
     private TargetRowViewModel AddTargetRow(TargetRule target)
     {
         var row = new TargetRowViewModel(target);
@@ -686,6 +747,7 @@ public sealed class MainWindowViewModel : ObservableObject
 
     private void OnTargetPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (_suppressRuleChanges) return;
         if (e.PropertyName is nameof(TargetRowViewModel.Enabled) or
             nameof(TargetRowViewModel.TemporarilyExcluded) or
             nameof(TargetRowViewModel.TitleIncludes) or
@@ -702,6 +764,10 @@ public sealed class MainWindowViewModel : ObservableObject
         if (e.PropertyName is nameof(SceneRowViewModel.Hotkey) or nameof(SceneRowViewModel.HotkeyText))
         {
             return;
+        }
+        if (e.PropertyName == nameof(SceneRowViewModel.Name))
+        {
+            SceneMenuChanged?.Invoke(this, EventArgs.Empty);
         }
         if (sender != SelectedScene) { _ = SaveAndReportAsync(); return; }
         if (e.PropertyName is nameof(SceneRowViewModel.IdleMinutes) or
@@ -734,6 +800,7 @@ public sealed class MainWindowViewModel : ObservableObject
     private async Task PersistAllAsync()
     {
         SaveSelectedTargets();
+        SaveSelectedLaunchItems();
         UpdateSettingsSnapshot();
         await QueueSettingsSaveAsync();
     }
@@ -743,7 +810,7 @@ public sealed class MainWindowViewModel : ObservableObject
         var active = SelectedScene.ToModel();
         _settings = _settings with
         {
-            SchemaVersion = 7,
+            SchemaVersion = 8,
             Scenes = Scenes.Select(scene => scene.ToModel()).ToList(),
             ActiveSceneId = SelectedScene.Id,
             Hotkey = active.Hotkey,
@@ -841,6 +908,7 @@ public sealed class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(StatusDetail));
         OnPropertyChanged(nameof(ToggleText));
         OnPropertyChanged(nameof(TargetCountText));
+        RefreshExtendedState();
         ToggleVisibilityCommand.RaiseCanExecuteChanged();
     }
 
@@ -881,12 +949,18 @@ public sealed class MainWindowViewModel : ObservableObject
     private sealed class NullPrivacyDesktopService : IPrivacyDesktopService
     {
         public bool IsActive => false;
+        public bool HasWorkspace => false;
+        public int RunningApplicationCount => 0;
+        public PrivacyDesktopShellMode? ActiveShellMode => null;
         public event EventHandler? StateChanged { add { } remove { } }
         public Task<(bool Success, string Message)> EnterAsync(
-            PrivacyDesktopShellMode shellMode,
+            PrivacyDesktopLaunchRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult((false, "独立桌面服务不可用。"));
         public Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default) => Task.FromResult((true, "当前已在原桌面。"));
+        public Task<(bool Success, string Message)> CloseWorkspaceAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult((true, "当前没有独立工作区。"));
+        public IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications() => [];
         public void Dispose() { }
     }
 }

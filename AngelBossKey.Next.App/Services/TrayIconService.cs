@@ -11,14 +11,23 @@ public sealed class TrayIconService : IDisposable
     private readonly Icon _readyIcon;
     private readonly Icon _hiddenIcon;
     private readonly Forms.ToolStripMenuItem _toggleItem;
+    private readonly Forms.ToolStripMenuItem _sceneMenu;
+    private readonly Action<Guid>? _activateScene;
 
-    public TrayIconService(Action showWindow, Action toggleVisibility, Action exit)
+    public TrayIconService(
+        Action showWindow,
+        Action toggleVisibility,
+        Action exit,
+        Action<Guid>? activateScene = null)
     {
+        _activateScene = activateScene;
         _readyIcon = CreateIcon(Color.FromArgb(20, 125, 100));
         _hiddenIcon = CreateIcon(Color.FromArgb(182, 106, 24));
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开主界面", null, (_, _) => showWindow());
+        _sceneMenu = new Forms.ToolStripMenuItem("场景");
+        menu.Items.Add(_sceneMenu);
         _toggleItem = new Forms.ToolStripMenuItem("隐藏目标", null, (_, _) => toggleVisibility());
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -41,6 +50,24 @@ public sealed class TrayIconService : IDisposable
             ? "天使老板键 Next - 目标已隐藏"
             : "天使老板键 Next - 保护就绪";
         _toggleItem.Text = isHidden ? "恢复目标" : "隐藏目标";
+    }
+
+    public void UpdateScenes(
+        IEnumerable<TraySceneEntry> scenes,
+        Guid activeSceneId)
+    {
+        _sceneMenu.DropDownItems.Clear();
+        foreach (var scene in scenes)
+        {
+            var item = new Forms.ToolStripMenuItem(scene.Label)
+            {
+                Checked = scene.Id == activeSceneId,
+                Tag = scene.Id
+            };
+            item.Click += (_, _) => _activateScene?.Invoke(scene.Id);
+            _sceneMenu.DropDownItems.Add(item);
+        }
+        _sceneMenu.Enabled = _sceneMenu.DropDownItems.Count > 0;
     }
 
     public void RefreshAfterExplorerRestart()
@@ -87,6 +114,8 @@ public sealed class TrayIconService : IDisposable
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool DestroyIcon(nint icon);
 }
+
+public sealed record TraySceneEntry(Guid Id, string Label);
 
 internal static class GraphicsExtensions
 {

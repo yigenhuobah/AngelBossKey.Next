@@ -57,7 +57,7 @@
                     </Style>
                 </DataGrid.Resources>
                 <DataGrid.Columns>
-                    <DataGridTemplateColumn Header="程序" Width="220">
+                    <DataGridTemplateColumn Header="程序" Width="200" SortMemberPath="Window.DisplayName">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
@@ -68,7 +68,10 @@
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="当前窗口" Binding="{Binding Window.Title}" Width="*" />
+                    <DataGridTextColumn Header="当前窗口" Binding="{Binding Window.Title}" Width="*"
+                                        SortMemberPath="Window.Title" />
+                    <DataGridTextColumn Header="路径" Binding="{Binding Window.ExecutablePath}" Width="230"
+                                        SortMemberPath="Window.ExecutablePath" />
                 </DataGrid.Columns>
             </DataGrid>
         </Border>

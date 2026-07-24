@@ -110,7 +110,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(7, loaded.SchemaVersion);
+        Assert.Equal(8, loaded.SchemaVersion);
         Assert.False(loaded.Hotkey.IsConfigured);
         Assert.Empty(loaded.Targets);
     }
@@ -139,7 +139,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(7, loaded.SchemaVersion);
+        Assert.Equal(8, loaded.SchemaVersion);
         var scene = Assert.Single(loaded.Scenes);
         Assert.False(loaded.Hotkey.IsConfigured);
         Assert.Equal(PrivacyDesktopShellMode.FullExplorer, scene.PrivacyShellMode);
@@ -156,7 +156,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(7, loaded.SchemaVersion);
+        Assert.Equal(8, loaded.SchemaVersion);
         var scene = Assert.Single(loaded.Scenes);
         Assert.Equal("默认场景", scene.Name);
         var rule = Assert.Single(loaded.Targets);
@@ -214,7 +214,7 @@ public sealed class CoreBehaviorTests : IDisposable
         });
         var loaded = await store.LoadAsync();
 
-        Assert.Equal(7, loaded.SchemaVersion);
+        Assert.Equal(8, loaded.SchemaVersion);
         Assert.Equal(second.Id, loaded.ActiveSceneId);
         Assert.True(loaded.EnableElevatedBroker);
         Assert.Equal(2, loaded.Scenes.Count);
@@ -225,15 +225,137 @@ public sealed class CoreBehaviorTests : IDisposable
     }
 
     [Fact]
+    public async Task SettingsStore_RoundTripsWorkspaceLaunchItems()
+    {
+        var path = Path.Combine(_directory, "settings.json");
+        var launchItem = new WorkspaceLaunchItem
+        {
+            DisplayName = "Editor",
+            ExecutablePath = @"C:\Apps\editor.exe",
+            Arguments = "--private --profile work",
+            WorkingDirectory = @"C:\Apps",
+            Enabled = true
+        };
+        var scene = new SceneProfile
+        {
+            Mode = SceneMode.PrivacyDesktop,
+            LaunchItems = [launchItem]
+        };
+        var store = new JsonSettingsStore(path);
+
+        await store.SaveAsync(new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id });
+        var loaded = await store.LoadAsync();
+
+        Assert.Equal(8, loaded.SchemaVersion);
+        Assert.Equal(launchItem, Assert.Single(Assert.Single(loaded.Scenes).LaunchItems));
+    }
+
+    [Fact]
+    public void SceneTransfer_RoundTripsContentButResetsIdentityAndHotkey()
+    {
+        var source = new SceneProfile
+        {
+            Name = "Work",
+            Hotkey = new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control,
+                VirtualKey = 0x31
+            },
+            Targets =
+            [
+                new TargetRule { DisplayName = "Editor", ExecutablePath = @"C:\Apps\editor.exe" }
+            ],
+            LaunchItems =
+            [
+                new WorkspaceLaunchItem
+                {
+                    DisplayName = "Terminal",
+                    ExecutablePath = @"C:\Windows\System32\cmd.exe",
+                    Arguments = "/k echo ready"
+                }
+            ]
+        };
+
+        var imported = SceneProfileTransfer.Import(SceneProfileTransfer.Export(source));
+
+        Assert.NotEqual(source.Id, imported.Id);
+        Assert.Equal("Work（导入）", imported.Name);
+        Assert.False(imported.Hotkey.IsConfigured);
+        Assert.Equal(source.Targets[0], imported.Targets[0]);
+        Assert.NotEqual(source.LaunchItems[0].Id, imported.LaunchItems[0].Id);
+        Assert.Equal(source.LaunchItems[0].ExecutablePath, imported.LaunchItems[0].ExecutablePath);
+        Assert.Equal(source.LaunchItems[0].Arguments, imported.LaunchItems[0].Arguments);
+        Assert.False(imported.LaunchItems[0].Enabled);
+    }
+
+    [Fact]
+    public void SceneTransfer_RejectsInvalidOrOversizedInput()
+    {
+        Assert.Throws<InvalidDataException>(() => SceneProfileTransfer.Import("{broken"));
+        Assert.Throws<InvalidDataException>(() => SceneProfileTransfer.Import(new string('x', 1024 * 1024 + 1)));
+    }
+
+    [Fact]
+    public void SceneTransfer_NormalizesInvalidMouseTrigger()
+    {
+        var imported = SceneProfileTransfer.Import(
+            """{"schemaVersion":1,"scene":{"name":"Imported","automation":{"mouseTrigger":999,"enableLowLevelMouseHook":true}}}""");
+
+        Assert.Equal(MouseAutomationTrigger.None, imported.Automation.MouseTrigger);
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\remote.exe")]
+    [InlineData("//server/share/remote.exe")]
+    [InlineData(@"\\?\UNC\server\share\remote.exe")]
+    public void SceneTransfer_DropsUncPaths(string remotePath)
+    {
+        var imported = SceneProfileTransfer.Import(SceneProfileTransfer.Export(new SceneProfile
+        {
+            Targets = [new TargetRule { DisplayName = "Remote", ExecutablePath = remotePath }],
+            LaunchItems = [new WorkspaceLaunchItem { DisplayName = "Remote", ExecutablePath = remotePath }]
+        }));
+
+        Assert.Empty(imported.Targets);
+        Assert.Empty(imported.LaunchItems);
+    }
+
+    [Fact]
     public async Task SettingsStore_DisablesMouseTriggerUnlessHookIsExplicitlyEnabled()
+    {
+        var path = Path.Combine(_directory, "settings.json");
+        var scene = new SceneProfile
+        {
+            Mode = (SceneMode)999,
+            Automation = new AutomationSettings
+            {
+                MouseTrigger = MouseAutomationTrigger.WheelDown,
+                EnableLowLevelMouseHook = false
+            }
+        };
+        await new JsonSettingsStore(path).SaveAsync(new AppSettings
+        {
+            Scenes = [scene],
+            ActiveSceneId = scene.Id
+        });
+
+        var loaded = await new JsonSettingsStore(path).LoadAsync();
+
+        var normalized = Assert.Single(loaded.Scenes);
+        Assert.Equal(SceneMode.HideWindows, normalized.Mode);
+        Assert.Equal(MouseAutomationTrigger.None, normalized.Automation.MouseTrigger);
+    }
+
+    [Fact]
+    public async Task SettingsStore_NormalizesInvalidMouseTrigger()
     {
         var path = Path.Combine(_directory, "settings.json");
         var scene = new SceneProfile
         {
             Automation = new AutomationSettings
             {
-                MouseTrigger = MouseAutomationTrigger.WheelDown,
-                EnableLowLevelMouseHook = false
+                MouseTrigger = (MouseAutomationTrigger)999,
+                EnableLowLevelMouseHook = true
             }
         };
         await new JsonSettingsStore(path).SaveAsync(new AppSettings

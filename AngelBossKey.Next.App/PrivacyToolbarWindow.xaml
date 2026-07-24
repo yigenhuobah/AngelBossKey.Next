@@ -1,0 +1,40 @@
+<Window x:Class="AngelBossKey.Next.App.PrivacyToolbarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="天使老板键 Next - 独立桌面工具条"
+        Width="520" Height="56" WindowStyle="None" ResizeMode="NoResize"
+        WindowStartupLocation="Manual" ShowInTaskbar="False" Topmost="True"
+        Background="#E91B211F" Foreground="#F4F7F5"
+        AutomationProperties.Name="独立桌面返回工具条">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#F4F7F5" />
+            <Setter Property="Background" Value="#24302C" />
+            <Setter Property="BorderBrush" Value="#40504A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="Margin" Value="4,0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+    </Window.Resources>
+    <Border BorderBrush="#52645D" BorderThickness="1" CornerRadius="7" Padding="8">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center" Margin="6,0,12,0">
+                <TextBlock x:Name="SceneText" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="Ctrl+Alt+Shift+F12 紧急返回" FontSize="10" Foreground="#AAB5B1" />
+            </StackPanel>
+            <Button x:Name="LaunchButton" Grid.Column="1" Content="启动 ▾" Click="LaunchButton_Click"
+                    AutomationProperties.Name="启动场景程序" />
+            <Button Grid.Column="2" Content="返回" Click="Return_Click"
+                    AutomationProperties.Name="返回原桌面" />
+            <Button Grid.Column="3" Content="关闭工作区" Click="CloseWorkspace_Click"
+                    Foreground="#FFD8D8" AutomationProperties.Name="关闭独立工作区" />
+        </Grid>
+    </Border>
+</Window>

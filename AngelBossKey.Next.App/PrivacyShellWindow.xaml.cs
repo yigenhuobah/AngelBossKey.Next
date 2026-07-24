@@ -1,4 +1,6 @@
 using AngelBossKey.Next.Win32;
+using AngelBossKey.Next.App.Services;
+using AngelBossKey.Next.Core.Models;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
@@ -16,10 +18,11 @@ public partial class PrivacyShellWindow : Window
     private bool _returnConfirmed;
     private bool _returnPending;
 
-    public PrivacyShellWindow(uint ownerThreadId)
+    public PrivacyShellWindow(uint ownerThreadId, Guid sceneId)
     {
         _ownerThreadId = ownerThreadId;
         InitializeComponent();
+        AddFavoriteLaunchers(WorkspaceLaunchCatalog.Load(sceneId).Items);
         _clockTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => UpdateClock(), Dispatcher);
         UpdateClock();
     }
@@ -51,6 +54,48 @@ public partial class PrivacyShellWindow : Window
     private void Return_Click(object sender, RoutedEventArgs e)
     {
         RequestReturn();
+    }
+
+    private void CloseWorkspace_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.MessageBox.Show(
+            this,
+            "关闭工作区会结束其中的程序。请先保存工作。是否继续？",
+            "关闭独立工作区",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+        if (!PrivacyDesktopShellBridge.RequestCloseWorkspace(_ownerThreadId))
+        {
+            StatusText.Text = "无法请求关闭，请使用紧急返回热键。";
+        }
+    }
+
+    private void AddFavoriteLaunchers(IReadOnlyList<WorkspaceLaunchItem> items)
+    {
+        var insertionIndex = 0;
+        foreach (var item in items.Take(4))
+        {
+            var button = new WpfButton
+            {
+                Content = item.DisplayName,
+                Tag = item,
+                Style = (Style)FindResource("ShellButton"),
+                ToolTip = $"启动 {item.DisplayName}"
+            };
+            button.Click += FavoriteLaunch_Click;
+            LauncherPanel.Children.Insert(insertionIndex++, button);
+        }
+    }
+
+    private void FavoriteLaunch_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not WpfButton { Tag: WorkspaceLaunchItem item }) return;
+        StatusText.Text = WorkspaceLaunchCatalog.TryLaunch(item, out var error)
+            ? $"已启动 {item.DisplayName}。"
+            : $"启动失败：{error}";
     }
 
     private void RequestReturn()

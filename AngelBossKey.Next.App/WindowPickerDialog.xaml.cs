@@ -25,8 +25,12 @@ public partial class WindowPickerDialog : Window
 
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshWindows();
 
-    private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) =>
-        CollectionViewSource.GetDefaultView(WindowGrid.ItemsSource)?.Refresh();
+    private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        var view = CollectionViewSource.GetDefaultView(WindowGrid.ItemsSource);
+        view?.Refresh();
+        UpdateCount(view);
+    }
 
     private void Add_Click(object sender, RoutedEventArgs e) => CompleteSelection();
 
@@ -72,7 +76,17 @@ public partial class WindowPickerDialog : Window
                 pickerItem.Window.Title.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
                 pickerItem.Window.ExecutablePath.Contains(search, StringComparison.OrdinalIgnoreCase);
         };
-        CountText.Text = $"找到 {_items.Count} 个可选窗口";
+        view.SortDescriptions.Clear();
+        view.SortDescriptions.Add(new SortDescription("Window.DisplayName", ListSortDirection.Ascending));
+        UpdateCount(view);
+    }
+
+    private void UpdateCount(ICollectionView? view)
+    {
+        var visible = view?.Cast<object>().Count() ?? 0;
+        CountText.Text = visible == _items.Count
+            ? $"找到 {_items.Count} 个可选窗口"
+            : $"显示 {visible} / {_items.Count} 个窗口";
     }
 
     private sealed class PickerItem

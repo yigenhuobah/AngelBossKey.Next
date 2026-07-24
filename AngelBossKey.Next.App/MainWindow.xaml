@@ -80,7 +80,7 @@
                 <ColumnDefinition Width="240" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="28" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
@@ -94,18 +94,33 @@
             <Button Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE74D;"
                     ToolTip="删除当前场景" AutomationProperties.Name="删除当前场景"
                     Foreground="{StaticResource DangerBrush}" Command="{Binding RemoveSceneCommand}" />
+            <Button Grid.Column="4" Style="{StaticResource IconButton}" Content="&#xE712;"
+                    Margin="8,0,20,0" ToolTip="场景操作" AutomationProperties.Name="场景操作"
+                    Click="SceneActions_Click">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="复制当前场景" Click="DuplicateScene_Click" />
+                        <MenuItem Header="导入场景…" Click="ImportScene_Click" />
+                        <MenuItem Header="导出当前场景…" Click="ExportScene_Click" />
+                        <Separator />
+                        <MenuItem Header="测试场景（5 秒自动返回）" Click="TestScene_Click" />
+                        <MenuItem Header="热键总览" Click="HotkeyOverview_Click" />
+                    </ContextMenu>
+                </Button.ContextMenu>
+            </Button>
             <TextBox Grid.Column="5" Text="{Binding SelectedScene.Name, UpdateSourceTrigger=LostFocus}"
                      MaxWidth="260" HorizontalAlignment="Left" VerticalAlignment="Center" Padding="8,5"
                      ToolTip="场景名称" AutomationProperties.Name="场景名称" />
             <StackPanel Grid.Column="6" Orientation="Horizontal" Margin="20,0,24,0">
                 <CheckBox Content="独立隐私桌面"
                           IsChecked="{Binding SelectedScene.IsPrivacyDesktop, Mode=TwoWay}"
+                          IsEnabled="{Binding CanEditWorkspaceSettings}"
                           VerticalAlignment="Center"
                           ToolTip="使用 Win32 独立 Desktop；不兼容安全桌面、反作弊和独占全屏" />
                 <ComboBox ItemsSource="{Binding PrivacyDesktopShellOptions}"
                           DisplayMemberPath="Label" SelectedValuePath="Value"
                           SelectedValue="{Binding SelectedScene.PrivacyShellMode}"
-                          IsEnabled="{Binding SelectedScene.IsPrivacyDesktop}"
+                          IsEnabled="{Binding CanEditWorkspaceMode}"
                           Width="178" Height="34" Margin="12,0,0,0"
                           ToolTip="完整桌面优先启动 Explorer，失败时自动回退到轻量 Shell"
                           AutomationProperties.Name="独立桌面模式" />
@@ -152,13 +167,21 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel>
                 <TextBlock Text="目标程序" FontWeight="SemiBold" FontSize="16" />
                 <TextBlock Text="{Binding TargetCountText}" Foreground="{StaticResource SecondaryTextBrush}"
                            FontSize="12" Margin="0,4,0,0" />
             </StackPanel>
-            <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Click="AddTarget_Click"
+            <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Click="WorkspaceItems_Click"
+                    Margin="0,0,10,0" AutomationProperties.Name="工作区启动项">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE768;" Margin="0,0,8,0" />
+                    <TextBlock Text="{Binding LaunchItemCountText}" />
+                </StackPanel>
+            </Button>
+            <Button Grid.Column="2" Style="{StaticResource SecondaryButton}" Click="AddTarget_Click"
                     AutomationProperties.Name="添加程序">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE710;" Margin="0,0,8,0" />
@@ -183,12 +206,26 @@
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
-            <DataGrid ItemsSource="{Binding Targets}" AutoGenerateColumns="False" HeadersVisibility="Column"
+            <DataGrid x:Name="TargetGrid" ItemsSource="{Binding Targets}" AutoGenerateColumns="False" HeadersVisibility="Column"
                       GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{StaticResource BorderBrush}"
                       BorderThickness="0" Background="Transparent" RowBackground="Transparent"
                       AlternatingRowBackground="#F8FAFA" RowHeight="84" CanUserAddRows="False"
-                      CanUserDeleteRows="False" CanUserResizeRows="False" SelectionMode="Single"
+                      CanUserDeleteRows="False" CanUserResizeRows="False" SelectionMode="Extended"
                       IsReadOnly="False" CanUserSortColumns="False">
+                <DataGrid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="启用所选" Tag="Enable" Click="BatchTargets_Click" />
+                        <MenuItem Header="停用所选" Tag="Disable" Click="BatchTargets_Click" />
+                        <MenuItem Header="临时排除所选" Tag="Exclude" Click="BatchTargets_Click" />
+                        <MenuItem Header="取消临时排除" Tag="Include" Click="BatchTargets_Click" />
+                        <Separator />
+                        <MenuItem Header="隐藏时静音" Tag="Mute" Click="BatchTargets_Click" />
+                        <MenuItem Header="取消静音" Tag="Unmute" Click="BatchTargets_Click" />
+                        <Separator />
+                        <MenuItem Header="移除所选" Tag="Remove" Click="BatchTargets_Click"
+                                  Foreground="{StaticResource DangerBrush}" />
+                    </ContextMenu>
+                </DataGrid.ContextMenu>
                 <DataGrid.Resources>
                     <Style TargetType="DataGridColumnHeader">
                         <Setter Property="Height" Value="38" />

@@ -86,7 +86,7 @@ public sealed class ViewModelBehaviorTests
 
         Assert.True(SpinWait.SpinUntil(() => store.LastSaved is not null, TimeSpan.FromSeconds(3)));
         Assert.Equal(["Second", "First"], store.LastSaved!.Targets.Select(target => target.DisplayName));
-        Assert.Equal(7, store.LastSaved.SchemaVersion);
+        Assert.Equal(8, store.LastSaved.SchemaVersion);
     }
 
     [Fact]
@@ -370,6 +370,14 @@ public sealed class ViewModelBehaviorTests
             Targets =
             [
                 new TargetRule { DisplayName = "Editor", ExecutablePath = Environment.ProcessPath! }
+            ],
+            LaunchItems =
+            [
+                new WorkspaceLaunchItem
+                {
+                    DisplayName = "Tool",
+                    ExecutablePath = Environment.ProcessPath!
+                }
             ]
         };
         var controller = new FakeVisibilityController();
@@ -388,6 +396,152 @@ public sealed class ViewModelBehaviorTests
         Assert.True(controller.IsHidden);
         Assert.Contains("回退为普通窗口隐藏", result.Detail);
         Assert.Equal(PrivacyDesktopShellMode.Compatibility, privacyDesktop.LastShellMode);
+        Assert.Equal(scene.Id, privacyDesktop.LastRequest?.SceneId);
+        Assert.Single(privacyDesktop.LastRequest!.LaunchItems);
+    }
+
+    [Fact]
+    public async Task DuplicateScene_CopiesRulesAndLaunchItemsButClearsHotkey()
+    {
+        var scene = new SceneProfile
+        {
+            Name = "Work",
+            Hotkey = new HotkeyGesture { Modifiers = HotkeyModifiers.Control, VirtualKey = 0x31 },
+            Targets =
+            [
+                new TargetRule { DisplayName = "Editor", ExecutablePath = Environment.ProcessPath! }
+            ],
+            LaunchItems =
+            [
+                new WorkspaceLaunchItem { DisplayName = "Tool", ExecutablePath = Environment.ProcessPath! }
+            ]
+        };
+        var store = new MemorySettingsStore();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
+            store,
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService());
+
+        await viewModel.DuplicateSelectedSceneAsync();
+
+        Assert.Equal(2, viewModel.Scenes.Count);
+        Assert.Equal("Work（副本）", viewModel.SelectedScene.Name);
+        Assert.False(viewModel.SelectedScene.Hotkey.IsConfigured);
+        Assert.Single(viewModel.Targets);
+        Assert.Single(viewModel.LaunchItems);
+        Assert.NotEqual(scene.LaunchItems[0].Id, viewModel.LaunchItems[0].Id);
+        Assert.Equal(8, store.LastSaved?.SchemaVersion);
+    }
+
+    [Fact]
+    public async Task CaptureWorkspaceApplications_AddsUniqueLaunchItems()
+    {
+        var scene = new SceneProfile { Name = "Workspace", Mode = SceneMode.PrivacyDesktop };
+        var privacy = new FailingPrivacyDesktopService
+        {
+            Applications =
+            [
+                new WorkspaceProcessInfo("Editor", Environment.ProcessPath!),
+                new WorkspaceProcessInfo("Editor duplicate", Environment.ProcessPath!)
+            ]
+        };
+        var store = new MemorySettingsStore();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
+            store,
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            privacyDesktop: privacy);
+
+        await viewModel.CaptureWorkspaceApplicationsAsync();
+
+        Assert.Single(viewModel.LaunchItems);
+        Assert.Single(store.LastSaved!.Scenes.Single().LaunchItems);
+    }
+
+    [Fact]
+    public async Task SceneSwitch_IsBlockedWhileWorkspaceApplicationsAreRunning()
+    {
+        var first = new SceneProfile { Name = "Workspace", Mode = SceneMode.PrivacyDesktop };
+        var second = new SceneProfile { Name = "Other" };
+        var privacy = new FailingPrivacyDesktopService
+        {
+            WorkspaceOpen = true,
+            Applications = [new WorkspaceProcessInfo("Editor", Environment.ProcessPath!)]
+        };
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [first, second], ActiveSceneId = first.Id },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            privacyDesktop: privacy);
+
+        var switched = await viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+
+        Assert.False(switched);
+        Assert.Equal(first.Id, viewModel.SelectedScene.Id);
+        Assert.Equal(0, privacy.CloseCalls);
+        Assert.Contains("仍有程序运行", viewModel.Message);
+    }
+
+    [Fact]
+    public async Task SceneSwitch_ClosesEmptyPreservedWorkspace()
+    {
+        var first = new SceneProfile { Name = "Workspace", Mode = SceneMode.PrivacyDesktop };
+        var second = new SceneProfile { Name = "Other" };
+        var privacy = new FailingPrivacyDesktopService { WorkspaceOpen = true };
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [first, second], ActiveSceneId = first.Id },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            privacyDesktop: privacy);
+
+        var switched = await viewModel.SelectSceneAsync(viewModel.Scenes[1]);
+
+        Assert.True(switched);
+        Assert.Equal(second.Id, viewModel.SelectedScene.Id);
+        Assert.Equal(1, privacy.CloseCalls);
+    }
+
+    [Fact]
+    public async Task SceneRemoval_IsBlockedWhileWorkspaceApplicationsAreRunning()
+    {
+        var first = new SceneProfile { Name = "Workspace", Mode = SceneMode.PrivacyDesktop };
+        var second = new SceneProfile { Name = "Other" };
+        var privacy = new FailingPrivacyDesktopService
+        {
+            WorkspaceOpen = true,
+            Applications = [new WorkspaceProcessInfo("Editor", Environment.ProcessPath!)]
+        };
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [first, second], ActiveSceneId = first.Id },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            privacyDesktop: privacy);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.Message) &&
+                viewModel.Message.Contains("再删除场景", StringComparison.Ordinal))
+            {
+                completed.TrySetResult();
+            }
+        };
+
+        viewModel.RemoveSceneCommand.Execute(null);
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(2, viewModel.Scenes.Count);
+        Assert.Equal(first.Id, viewModel.SelectedScene.Id);
+        Assert.Equal(0, privacy.CloseCalls);
     }
 
     private static MainWindowViewModel CreateViewModel(
@@ -567,18 +721,36 @@ public sealed class ViewModelBehaviorTests
     private sealed class FailingPrivacyDesktopService : IPrivacyDesktopService
     {
         public PrivacyDesktopShellMode? LastShellMode { get; private set; }
+        public PrivacyDesktopLaunchRequest? LastRequest { get; private set; }
+        public IReadOnlyList<WorkspaceProcessInfo> Applications { get; init; } = [];
+        public bool WorkspaceOpen { get; set; }
+        public int CloseCalls { get; private set; }
         public bool IsActive => false;
+        public bool HasWorkspace => WorkspaceOpen;
+        public int RunningApplicationCount => Applications.Count;
+        public PrivacyDesktopShellMode? ActiveShellMode => null;
         public event EventHandler? StateChanged { add { } remove { } }
         public Task<(bool Success, string Message)> EnterAsync(
-            PrivacyDesktopShellMode shellMode,
+            PrivacyDesktopLaunchRequest request,
             CancellationToken cancellationToken = default)
         {
-            LastShellMode = shellMode;
+            LastRequest = request;
+            LastShellMode = request.ShellMode;
             return Task.FromResult((false, "桌面切换失败。"));
         }
         public Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult((true, "已返回。"));
+        public Task<(bool Success, string Message)> CloseWorkspaceAsync(CancellationToken cancellationToken = default) =>
+            CloseWorkspaceCore();
+        public IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications() => Applications;
         public void Dispose() { }
+
+        private Task<(bool Success, string Message)> CloseWorkspaceCore()
+        {
+            CloseCalls++;
+            WorkspaceOpen = false;
+            return Task.FromResult((true, "已关闭。"));
+        }
     }
 
     private sealed class ThrowingAutomationService : IAutomationTriggerService

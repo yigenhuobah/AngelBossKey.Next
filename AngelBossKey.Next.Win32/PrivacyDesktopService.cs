@@ -17,8 +17,10 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
     private readonly Thread _desktopThread;
     private readonly ManualResetEventSlim _threadStarted = new();
     private readonly CancellationTokenSource _shutdown = new();
+    private DesktopContext? _context;
     private uint _desktopThreadId;
     private int _activeShellMode = -1;
+    private int _workspaceShellMode = -1;
     private bool _isActive;
     private bool _disposed;
 
@@ -36,14 +38,28 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
     }
 
     public bool IsActive => Volatile.Read(ref _isActive);
+    public bool HasWorkspace
+    {
+        get
+        {
+            var mode = Volatile.Read(ref _workspaceShellMode);
+            return mode >= 0 && _context?.HasWorkspace((PrivacyDesktopShellMode)mode) == true;
+        }
+    }
+    public int RunningApplicationCount => GetRunningApplications().Count;
+    public PrivacyDesktopShellMode? ActiveShellMode => Volatile.Read(ref _workspaceShellMode) is var mode && mode >= 0
+        ? (PrivacyDesktopShellMode)mode
+        : null;
     public event EventHandler? StateChanged;
 
     public async Task<(bool Success, string Message)> EnterAsync(
-        PrivacyDesktopShellMode shellMode,
+        PrivacyDesktopLaunchRequest request,
         CancellationToken cancellationToken = default)
     {
+        var shellMode = request.ShellMode;
         var requestedShellMode = shellMode;
         var shellMessage = string.Empty;
+        var workspaceWasCreated = false;
         if (IsActive)
         {
             return (true, "已位于独立隐私桌面。使用 Ctrl+Alt+Shift+F12 紧急返回。");
@@ -59,10 +75,33 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         try
         {
             context = await _desktopReady.Task.WaitAsync(cancellationToken);
-            var shell = await PrepareShellAsync(context, shellMode, cancellationToken);
-            if (!shell.Success) return (false, shell.Message);
-            shellMode = shell.Mode;
-            shellMessage = shell.Message;
+            var existingMode = ActiveShellMode;
+            if (existingMode is not null && context.HasWorkspace(existingMode.Value))
+            {
+                shellMode = existingMode.Value;
+                var existingShell = await EnsureShellReadyAsync(
+                    context,
+                    shellMode,
+                    request.SceneId,
+                    cancellationToken);
+                if (!existingShell.Success) return (false, existingShell.Message);
+                shellMessage = "已重新进入保留的独立工作区。";
+            }
+            else
+            {
+                var shell = await PrepareShellAsync(context, shellMode, request.SceneId, cancellationToken);
+                if (!shell.Success) return (false, shell.Message);
+                shellMode = shell.Mode;
+                shellMessage = shell.Message;
+                workspaceWasCreated = true;
+                Volatile.Write(ref _workspaceShellMode, (int)shellMode);
+                var launched = context.LaunchItems(shellMode, request.LaunchItems);
+                if (launched.Started > 0 || launched.Failed > 0)
+                {
+                    shellMessage = $"{shellMessage} 已启动 {launched.Started} 项，失败 {launched.Failed} 项。";
+                    _log.Info("desktop.launch-items", $"started={launched.Started}; failed={launched.Failed}");
+                }
+            }
         }
         catch (Exception exception)
         {
@@ -76,6 +115,11 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             {
                 NativeMethods.SwitchDesktop(_originalDesktop);
             }
+            if (workspaceWasCreated)
+            {
+                context.CloseWorkspace(shellMode);
+                Volatile.Write(ref _workspaceShellMode, -1);
+            }
             return (false, "无法切换到独立桌面，可能处于安全桌面或当前会话不允许切换。");
         }
 
@@ -86,6 +130,11 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             if (_originalDesktop != 0) NativeMethods.SwitchDesktop(_originalDesktop);
             Volatile.Write(ref _isActive, false);
             Volatile.Write(ref _activeShellMode, -1);
+            if (workspaceWasCreated)
+            {
+                context.CloseWorkspace(shellMode);
+                Volatile.Write(ref _workspaceShellMode, -1);
+            }
             _log.Warning("desktop.switch", "shell-exited-before-confirmation=true");
             return (false, "隐私桌面 Shell 在切换时已退出，已自动返回原桌面。");
         }
@@ -94,8 +143,11 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         var modeText = shellMode == PrivacyDesktopShellMode.FullExplorer
             ? "完整 Explorer 桌面"
             : "兼容轻量桌面";
-        var fallbackText = requestedShellMode != shellMode ? $"{shellMessage} " : string.Empty;
-        return (true, $"已进入{modeText}。{fallbackText}按 Ctrl+Alt+Shift+F12 紧急返回。");
+        var showShellMessage = requestedShellMode != shellMode ||
+            shellMessage.Contains("已启动", StringComparison.Ordinal) ||
+            shellMessage.Contains("失败", StringComparison.Ordinal);
+        var detailText = showShellMessage ? $"{shellMessage} " : string.Empty;
+        return (true, $"已进入{modeText}。{detailText}按 Ctrl+Alt+Shift+F12 紧急返回。");
     }
 
     public Task<(bool Success, string Message)> ReturnAsync(
@@ -115,6 +167,32 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
 
         MarkReturned("desktop.return");
         return Task.FromResult((true, "已返回原桌面。"));
+    }
+
+    public Task<(bool Success, string Message)> CloseWorkspaceAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (IsActive && (_originalDesktop == 0 || !NativeMethods.SwitchDesktop(_originalDesktop)))
+        {
+            _log.Warning("desktop.close", $"return-failed=true; error={Marshal.GetLastWin32Error()}");
+            return Task.FromResult((false, "无法返回原桌面，工作区没有关闭。"));
+        }
+
+        var mode = ActiveShellMode;
+        if (IsActive) MarkReturned("desktop.close-return");
+        if (mode is not null) _context?.CloseWorkspace(mode.Value);
+        Volatile.Write(ref _workspaceShellMode, -1);
+        Volatile.Write(ref _activeShellMode, -1);
+        if (!_disposed) StateChanged?.Invoke(this, EventArgs.Empty);
+        _log.Info("desktop.close", "success=true");
+        return Task.FromResult((true, "独立工作区已关闭。"));
+    }
+
+    public IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications()
+    {
+        var mode = ActiveShellMode;
+        return mode is null ? [] : _context?.GetRunningApplications(mode.Value) ?? [];
     }
 
     public void Dispose()
@@ -198,6 +276,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         var explorerShell = new ExplorerDesktopShellHost(
             desktop,
             $"AngelBossKey.Next.{Environment.ProcessId}",
+            _desktopThreadId,
             _log);
         compatibleShell.Exited += (_, _) =>
             NativeMethods.PostThreadMessageW(
@@ -213,7 +292,8 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
                 0);
         try
         {
-            _desktopReady.TrySetResult(new DesktopContext(desktop, compatibleShell, explorerShell));
+            _context = new DesktopContext(desktop, compatibleShell, explorerShell);
+            _desktopReady.TrySetResult(_context);
             var message = new NativeMethods.Message();
             while (!_shutdown.IsCancellationRequested &&
                 NativeMethods.GetMessageW(ref message, 0, 0, 0) > 0)
@@ -246,6 +326,20 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
                     continue;
                 }
 
+                if (message.Id == PrivacyDesktopShellBridge.CloseWorkspaceRequestMessage)
+                {
+                    var mode = ActiveShellMode;
+                    if (_originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
+                    {
+                        MarkReturned("desktop.shell-close-return");
+                        if (mode is not null) _context?.CloseWorkspace(mode.Value);
+                        Volatile.Write(ref _workspaceShellMode, -1);
+                        if (!_disposed) StateChanged?.Invoke(this, EventArgs.Empty);
+                        _log.Info("desktop.shell-close", "success=true");
+                    }
+                    continue;
+                }
+
                 if (message.Id == PrivacyDesktopShellBridge.ShellExitedMessage)
                 {
                     var exitedMode = (int)message.WParam - 1;
@@ -253,6 +347,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
                         _originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
                     {
                         MarkReturned("desktop.shell-exited");
+                        _log.Warning("desktop.shell-exited", "workspace-preserved=true");
                     }
                     continue;
                 }
@@ -268,6 +363,8 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             NativeMethods.UnregisterHotKey(0, EmergencyHotkeyId);
             explorerShell.Dispose();
             compatibleShell.Dispose();
+            _context = null;
+            Volatile.Write(ref _workspaceShellMode, -1);
             NativeMethods.SetThreadDesktop(threadOriginalDesktop);
             NativeMethods.CloseDesktop(desktop);
         }
@@ -276,13 +373,14 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
     private async Task<ShellPreparationResult> PrepareShellAsync(
         DesktopContext context,
         PrivacyDesktopShellMode requestedMode,
+        Guid sceneId,
         CancellationToken cancellationToken)
     {
         if (requestedMode == PrivacyDesktopShellMode.Compatibility)
         {
             context.ExplorerShell.Stop();
             var compatible = await Task.Run(
-                () => context.CompatibleShell.EnsureReady(cancellationToken),
+                () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
                 cancellationToken);
             return new ShellPreparationResult(
                 compatible.Success,
@@ -292,7 +390,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
 
         context.CompatibleShell.Stop();
         var explorer = await Task.Run(
-            () => context.ExplorerShell.EnsureReady(cancellationToken),
+            () => context.ExplorerShell.EnsureReady(sceneId, cancellationToken),
             cancellationToken);
         if (explorer.Success)
         {
@@ -300,7 +398,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         }
 
         var fallback = await Task.Run(
-            () => context.CompatibleShell.EnsureReady(cancellationToken),
+            () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
             cancellationToken);
         var message = fallback.Success
             ? $"{explorer.Message} 已自动回退到兼容轻量桌面。"
@@ -312,6 +410,18 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             message);
     }
 
+    private static async Task<(bool Success, string Message)> EnsureShellReadyAsync(
+        DesktopContext context,
+        PrivacyDesktopShellMode mode,
+        Guid sceneId,
+        CancellationToken cancellationToken) => mode == PrivacyDesktopShellMode.FullExplorer
+            ? await Task.Run(
+                () => context.ExplorerShell.EnsureReady(sceneId, cancellationToken),
+                cancellationToken)
+            : await Task.Run(
+                () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
+                cancellationToken);
+
     private sealed record DesktopContext(
         nint Desktop,
         DesktopShellHost CompatibleShell,
@@ -321,6 +431,30 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             mode == PrivacyDesktopShellMode.FullExplorer
                 ? ExplorerShell.IsReady
                 : CompatibleShell.IsReady;
+
+        internal bool HasWorkspace(PrivacyDesktopShellMode mode) =>
+            mode == PrivacyDesktopShellMode.FullExplorer
+                ? ExplorerShell.HasWorkspace
+                : CompatibleShell.HasWorkspace;
+
+        internal (int Started, int Failed) LaunchItems(
+            PrivacyDesktopShellMode mode,
+            IEnumerable<WorkspaceLaunchItem> launchItems) =>
+            mode == PrivacyDesktopShellMode.FullExplorer
+                ? ExplorerShell.LaunchItems(launchItems)
+                : CompatibleShell.LaunchItems(launchItems);
+
+        internal IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications(
+            PrivacyDesktopShellMode mode) =>
+            mode == PrivacyDesktopShellMode.FullExplorer
+                ? ExplorerShell.GetRunningApplications()
+                : CompatibleShell.GetRunningApplications();
+
+        internal void CloseWorkspace(PrivacyDesktopShellMode mode)
+        {
+            if (mode == PrivacyDesktopShellMode.FullExplorer) ExplorerShell.Reset();
+            else CompatibleShell.Reset();
+        }
     }
 
     private sealed record ShellPreparationResult(
