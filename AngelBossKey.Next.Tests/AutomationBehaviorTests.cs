@@ -47,6 +47,12 @@ public sealed class AutomationBehaviorTests
         Assert.True(ExplorerDesktopShellHost.IsRequiredShellClass("Shell_TrayWnd"));
         Assert.True(ExplorerDesktopShellHost.IsRequiredShellClass("Progman"));
         Assert.False(ExplorerDesktopShellHost.IsRequiredShellClass("WorkerW"));
+        Assert.True(ExplorerDesktopShellHost.IsExpectedExplorerPath(
+            @"C:\Windows\explorer.exe",
+            @"c:\windows\EXPLORER.EXE"));
+        Assert.False(ExplorerDesktopShellHost.IsExpectedExplorerPath(
+            @"C:\Tools\explorer.exe",
+            @"C:\Windows\explorer.exe"));
     }
 
     [Fact]

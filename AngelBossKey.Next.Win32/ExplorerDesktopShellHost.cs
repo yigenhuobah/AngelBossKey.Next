@@ -47,6 +47,22 @@ internal sealed class ExplorerDesktopShellHost(
         string.Equals(className, TaskbarClass, StringComparison.Ordinal) ||
         string.Equals(className, DesktopClass, StringComparison.Ordinal);
 
+    internal static bool IsExpectedExplorerPath(string actualPath, string expectedPath)
+    {
+        if (string.IsNullOrWhiteSpace(actualPath) || string.IsNullOrWhiteSpace(expectedPath)) return false;
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(actualPath),
+                Path.GetFullPath(expectedPath),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     internal (bool Success, string Message) EnsureReady(CancellationToken cancellationToken)
     {
         lock (_sync)
@@ -60,17 +76,25 @@ internal sealed class ExplorerDesktopShellHost(
             }
             if (_processHandle == 0 && !StartExplorer(out var error)) return (false, error);
 
-            var timeout = Stopwatch.StartNew();
-            while (timeout.Elapsed < TimeSpan.FromSeconds(12))
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (TryAdoptReadyShell())
+                var timeout = Stopwatch.StartNew();
+                while (timeout.Elapsed < TimeSpan.FromSeconds(12))
                 {
-                    StartProcessMonitor(_processHandle, _processId);
-                    _log.Info("desktop.explorer", $"ready=true; pid={_processId}");
-                    return (true, "完整 Explorer 桌面已就绪。");
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (TryAdoptReadyShell())
+                    {
+                        StartProcessMonitor(_processHandle, _processId);
+                        _log.Info("desktop.explorer", $"ready=true; pid={_processId}");
+                        return (true, "完整 Explorer 桌面已就绪。");
+                    }
+                    Thread.Sleep(75);
                 }
-                Thread.Sleep(75);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                StopShell();
+                throw;
             }
 
             var message = "Explorer 未能在独立桌面创建完整任务栏和桌面。";
@@ -141,6 +165,8 @@ internal sealed class ExplorerDesktopShellHost(
     {
         var shellProcessId = FindCompleteShellProcess();
         if (shellProcessId == 0) return false;
+        var processPath = ProcessPathResolver.TryGetPath((int)shellProcessId);
+        if (!IsExpectedExplorerPath(processPath, _explorerPath)) return false;
         if (shellProcessId == _processId && IsProcessRunning(_processHandle)) return true;
 
         var shellProcess = NativeMethods.OpenProcess(

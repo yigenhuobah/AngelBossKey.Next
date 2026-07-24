@@ -84,21 +84,29 @@ internal sealed class DesktopShellHost(
                 return (false, error);
             }
 
-            var timeout = Stopwatch.StartNew();
-            while (timeout.Elapsed < TimeSpan.FromSeconds(8))
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (FindUsableWindow() != 0)
+                var timeout = Stopwatch.StartNew();
+                while (timeout.Elapsed < TimeSpan.FromSeconds(8))
                 {
-                    _log.Info("desktop.shell", $"ready=true; pid={_processId}");
-                    return (true, "隐私桌面 Shell 已就绪。");
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (FindUsableWindow() != 0)
+                    {
+                        _log.Info("desktop.shell", $"ready=true; pid={_processId}");
+                        return (true, "隐私桌面 Shell 已就绪。");
+                    }
+                    if (_processHandle != 0 &&
+                        NativeMethods.WaitForSingleObject(_processHandle, 0) != NativeMethods.WaitTimeout)
+                    {
+                        break;
+                    }
+                    Thread.Sleep(50);
                 }
-                if (_processHandle != 0 &&
-                    NativeMethods.WaitForSingleObject(_processHandle, 0) != NativeMethods.WaitTimeout)
-                {
-                    break;
-                }
-                Thread.Sleep(50);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                StopShell();
+                throw;
             }
 
             var message = "隐私桌面 Shell 未能创建可见窗口，已取消切换。";
