@@ -201,4 +201,12 @@ dotnet test .\AngelBossKey.Next.Tests\AngelBossKey.Next.Tests.csproj -c Release
 dotnet publish .\AngelBossKey.Next.App\AngelBossKey.Next.App.csproj -p:PublishProfile=Portable
 ```
 
+提交代码前运行统一质量门禁：
+
+```powershell
+.\eng\quality.ps1
+```
+
+它会依次执行依赖还原、`dotnet format` 校验、启用 SDK `Recommended` Roslyn analyzers 的 Release 构建，以及完整测试。所有编译和 analyzer 告警都会按错误处理。需要自动修复格式时运行 `.\eng\quality.ps1 -Fix`；依赖已经还原时可追加 `-SkipRestore`。追加 `-Coverage` 会生成 Cobertura 覆盖率报告并打印行覆盖率与分支覆盖率，报告保存在被 Git 忽略的 `artifacts\coverage-*` 目录。
+
 发布输出位于 `dist\AngelBossKey.Next-v0.8.0-win-x64`。运行 `AngelBossKey.Next.exe` 即可，无需安装。自包含包固定携带稳定版 .NET 10.0.10 运行时。

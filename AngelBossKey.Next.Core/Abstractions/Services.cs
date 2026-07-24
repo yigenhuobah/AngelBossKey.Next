@@ -51,7 +51,7 @@ public interface IDiagnosticLog
 {
     void Info(string eventName, string details);
     void Warning(string eventName, string details);
-    void Error(string eventName, Exception exception);
+    void LogError(string eventName, Exception exception);
 }
 
 public interface IStartupRegistration

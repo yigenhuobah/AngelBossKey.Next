@@ -39,7 +39,7 @@ public sealed class WindowStateMonitor(
                 }
                 catch (Exception exception)
                 {
-                    diagnosticLog.Error("windows.monitor", exception);
+                    diagnosticLog.LogError("windows.monitor", exception);
                 }
             }
         }

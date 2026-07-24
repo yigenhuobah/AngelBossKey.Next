@@ -13,7 +13,7 @@ public sealed class RollingDiagnosticLog(string directory) : IDiagnosticLog
 
     public void Info(string eventName, string details) => Write("INFO", eventName, details);
     public void Warning(string eventName, string details) => Write("WARN", eventName, details);
-    public void Error(string eventName, Exception exception) =>
+    public void LogError(string eventName, Exception exception) =>
         Write("ERROR", eventName, $"{exception.GetType().Name}: {exception.Message}");
 
     private void Write(string level, string eventName, string details)

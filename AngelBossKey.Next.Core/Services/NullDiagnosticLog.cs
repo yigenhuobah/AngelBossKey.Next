@@ -18,7 +18,7 @@ public sealed class NullDiagnosticLog : IDiagnosticLog
     {
     }
 
-    public void Error(string eventName, Exception exception)
+    public void LogError(string eventName, Exception exception)
     {
     }
 }

@@ -240,7 +240,7 @@ internal sealed class DesktopShellHost(
 
     private void StartProcessMonitor(nint processHandle, uint processId)
     {
-        _monitorShutdown?.Cancel();
+        StopProcessMonitor();
         var shutdown = new CancellationTokenSource();
         _monitorShutdown = shutdown;
         _ = MonitorProcessAsync(processHandle, processId, shutdown.Token);
@@ -347,15 +347,14 @@ internal sealed class DesktopShellHost(
 
     private void StopShell(bool closeWorkspace = true)
     {
-        _monitorShutdown?.Cancel();
-        _monitorShutdown = null;
+        StopProcessMonitor();
         if (!closeWorkspace)
         {
             if (_processHandle != 0 &&
                 NativeMethods.WaitForSingleObject(_processHandle, 0) == NativeMethods.WaitTimeout)
             {
                 NativeMethods.TerminateProcess(_processHandle, 0);
-                NativeMethods.WaitForSingleObject(_processHandle, 750);
+                WaitForProcessExit(_processHandle, 750);
             }
             if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
             _processHandle = 0;
@@ -367,16 +366,32 @@ internal sealed class DesktopShellHost(
             _jobHandle == 0)
         {
             NativeMethods.TerminateProcess(_processHandle, 0);
-            NativeMethods.WaitForSingleObject(_processHandle, 750);
+            WaitForProcessExit(_processHandle, 750);
         }
         if (_jobHandle != 0)
         {
             NativeMethods.CloseHandle(_jobHandle);
             _jobHandle = 0;
-            if (_processHandle != 0) NativeMethods.WaitForSingleObject(_processHandle, 750);
+            if (_processHandle != 0) WaitForProcessExit(_processHandle, 750);
         }
         if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
         _processHandle = 0;
         _processId = 0;
+    }
+
+    private void StopProcessMonitor()
+    {
+        var shutdown = _monitorShutdown;
+        _monitorShutdown = null;
+        shutdown?.Cancel();
+        shutdown?.Dispose();
+    }
+
+    private void WaitForProcessExit(nint processHandle, uint timeoutMilliseconds)
+    {
+        if (NativeMethods.WaitForSingleObject(processHandle, timeoutMilliseconds) == uint.MaxValue)
+        {
+            _log.Warning("desktop.shell.wait", "failed=true");
+        }
     }
 }

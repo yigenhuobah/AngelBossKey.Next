@@ -92,7 +92,7 @@ public sealed class ElevatedWindowBrokerClient(
             }
             catch (Exception exception)
             {
-                _log.Error("broker.request", exception);
+                _log.LogError("broker.request", exception);
                 return new ElevatedWindowResponse { FailedCount = 1, Message = $"提权 Broker 通信失败：{exception.Message}" };
             }
         }

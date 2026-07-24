@@ -345,7 +345,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 UpdateSettingsSnapshot();
             }
             OnPropertyChanged(nameof(SelectedScene));
-            _diagnosticLog.Error("scene.select", exception);
+            _diagnosticLog.LogError("scene.select", exception);
             Message = $"切换场景失败，已恢复原场景：{exception.Message}";
             RefreshAllState();
             return false;
@@ -473,7 +473,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            _diagnosticLog.Error("operation.toggle", exception);
+            _diagnosticLog.LogError("operation.toggle", exception);
             Message = $"操作失败：{exception.Message}";
             return new VisibilityOperationResult { FailedCount = 1 };
         }
@@ -518,14 +518,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _hotkeyChangeGate.Release();
         await _ruleChangeGate.WaitAsync();
         try { await PersistTargetsAsync(); }
-        catch (Exception exception) { _diagnosticLog.Error("settings.flush", exception); }
+        catch (Exception exception) { _diagnosticLog.LogError("settings.flush", exception); }
         finally { _ruleChangeGate.Release(); }
         while (true)
         {
             Task pending;
             lock (_settingsSaveSync) pending = _settingsSaveTail;
             try { await pending; }
-            catch (Exception exception) { _diagnosticLog.Error("settings.save", exception); }
+            catch (Exception exception) { _diagnosticLog.LogError("settings.save", exception); }
             lock (_settingsSaveSync)
             {
                 if (ReferenceEquals(pending, _settingsSaveTail)) break;
@@ -600,7 +600,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            _diagnosticLog.Error("scene.add", exception);
+            _diagnosticLog.LogError("scene.add", exception);
             Message = $"新建场景失败：{exception.Message}";
         }
 
@@ -682,7 +682,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 OnPropertyChanged(nameof(SelectedScene));
                 SceneMenuChanged?.Invoke(this, EventArgs.Empty);
             }
-            _diagnosticLog.Error("scene.remove", exception);
+            _diagnosticLog.LogError("scene.remove", exception);
             Message = $"删除场景失败，已恢复原场景：{exception.Message}";
             RemoveSceneCommand.RaiseCanExecuteChanged();
             RefreshAllState();
@@ -695,7 +695,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void ReportSceneCommandException(Exception exception)
     {
-        _diagnosticLog.Error("scene.command", exception);
+        _diagnosticLog.LogError("scene.command", exception);
         Message = $"场景操作失败：{exception.Message}";
         RefreshAllState();
     }
@@ -703,7 +703,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void TryConfigureAutomation(SceneRowViewModel scene, string eventName)
     {
         try { _automationService.Configure(scene.ToAutomation()); }
-        catch (Exception exception) { _diagnosticLog.Error(eventName, exception); }
+        catch (Exception exception) { _diagnosticLog.LogError(eventName, exception); }
     }
 
     private void LoadSelectedTargets()
@@ -788,7 +788,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         else dispatcher.Invoke(RefreshAllState);
     }
 
-    private IReadOnlyCollection<TargetRule> EffectiveTargets() =>
+    private TargetRule[] EffectiveTargets() =>
         Targets.Select(target => target.ToEffectiveModel()).ToArray();
 
     private async Task PersistTargetsAsync()
@@ -856,7 +856,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            _diagnosticLog.Error("rules.save", exception);
+            _diagnosticLog.LogError("rules.save", exception);
             Message = $"保存目标设置失败：{exception.Message}";
         }
         finally { _ruleChangeGate.Release(); }

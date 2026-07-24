@@ -2,7 +2,6 @@ using AngelBossKey.Next.App.Services;
 using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Win32;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Interop;
 using WpfContextMenu = System.Windows.Controls.ContextMenu;
 using WpfMenuItem = System.Windows.Controls.MenuItem;

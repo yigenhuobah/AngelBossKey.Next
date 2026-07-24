@@ -413,7 +413,7 @@ internal sealed class ExplorerDesktopShellHost(
 
     private void StartProcessMonitor(nint processHandle, uint processId, nint toolbarProcessHandle)
     {
-        _monitorShutdown?.Cancel();
+        StopProcessMonitor();
         var shutdown = new CancellationTokenSource();
         _monitorShutdown = shutdown;
         _ = MonitorProcessAsync(processHandle, processId, toolbarProcessHandle, shutdown.Token);
@@ -485,14 +485,13 @@ internal sealed class ExplorerDesktopShellHost(
 
     private void StopShell(bool closeWorkspace = true)
     {
-        _monitorShutdown?.Cancel();
-        _monitorShutdown = null;
+        StopProcessMonitor();
         if (!closeWorkspace)
         {
             if (_toolbarProcessHandle != 0 && IsProcessRunning(_toolbarProcessHandle))
             {
                 NativeMethods.TerminateProcess(_toolbarProcessHandle, 0);
-                NativeMethods.WaitForSingleObject(_toolbarProcessHandle, 750);
+                WaitForProcessExit(_toolbarProcessHandle, 750);
             }
             if (_processHandle != 0 && IsProcessRunning(_processHandle))
             {
@@ -500,7 +499,7 @@ internal sealed class ExplorerDesktopShellHost(
                 if (NativeMethods.WaitForSingleObject(_processHandle, 750) == NativeMethods.WaitTimeout)
                 {
                     NativeMethods.TerminateProcess(_processHandle, 0);
-                    NativeMethods.WaitForSingleObject(_processHandle, 750);
+                    WaitForProcessExit(_processHandle, 750);
                 }
             }
             if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
@@ -514,18 +513,18 @@ internal sealed class ExplorerDesktopShellHost(
         if (_processHandle != 0 && IsProcessRunning(_processHandle))
         {
             CloseOwnedShellWindows();
-            NativeMethods.WaitForSingleObject(_processHandle, 1_500);
+            WaitForProcessExit(_processHandle, 1_500);
         }
         if (_jobHandle != 0)
         {
             NativeMethods.CloseHandle(_jobHandle);
             _jobHandle = 0;
-            if (_processHandle != 0) NativeMethods.WaitForSingleObject(_processHandle, 750);
+            if (_processHandle != 0) WaitForProcessExit(_processHandle, 750);
         }
         else if (_processHandle != 0 && IsProcessRunning(_processHandle))
         {
             NativeMethods.TerminateProcess(_processHandle, 0);
-            NativeMethods.WaitForSingleObject(_processHandle, 750);
+            WaitForProcessExit(_processHandle, 750);
         }
         if (_processHandle != 0) NativeMethods.CloseHandle(_processHandle);
         if (_toolbarProcessHandle != 0) NativeMethods.CloseHandle(_toolbarProcessHandle);
@@ -535,9 +534,25 @@ internal sealed class ExplorerDesktopShellHost(
         _toolbarProcessId = 0;
     }
 
+    private void StopProcessMonitor()
+    {
+        var shutdown = _monitorShutdown;
+        _monitorShutdown = null;
+        shutdown?.Cancel();
+        shutdown?.Dispose();
+    }
+
     private static bool IsProcessRunning(nint processHandle) =>
         processHandle != 0 &&
         NativeMethods.WaitForSingleObject(processHandle, 0) == NativeMethods.WaitTimeout;
+
+    private void WaitForProcessExit(nint processHandle, uint timeoutMilliseconds)
+    {
+        if (NativeMethods.WaitForSingleObject(processHandle, timeoutMilliseconds) == uint.MaxValue)
+        {
+            _log.Warning("desktop.explorer.wait", "failed=true");
+        }
+    }
 
     [Flags]
     private enum ShellWindowKinds

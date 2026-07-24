@@ -1,0 +1,48 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cs,xaml}]
+indent_style = space
+indent_size = 4
+
+[*.{csproj,props,slnx}]
+indent_style = space
+indent_size = 2
+
+[*.cs]
+dotnet_diagnostic.IDE0005.severity = suggestion
+
+[AngelBossKey.Next.Tests/*.cs]
+# Behavior_Result names make the xUnit suite easier to scan.
+dotnet_diagnostic.CA1707.severity = none
+
+[AngelBossKey.Next.App/App.xaml.cs]
+# WPF owns the Application lifetime; DisposeServices releases its owned services.
+dotnet_diagnostic.CA1001.severity = none
+# Interfaces here preserve the application/core boundary; virtual dispatch is not a hot path.
+dotnet_diagnostic.CA1859.severity = none
+
+[AngelBossKey.Next.App/ViewModels/MainWindowViewModel*.cs]
+# The view model and its gates share the process lifetime and are drained during shutdown.
+dotnet_diagnostic.CA1001.severity = none
+
+[AngelBossKey.Next.Core/Storage/JsonSettingsStore.cs]
+# The async write gate shares the application lifetime and owns no external handle by default.
+dotnet_diagnostic.CA1001.severity = none
+
+[AngelBossKey.Next.Core/Storage/JsonAudioRecoveryStore.cs]
+# The async write gate shares the application lifetime and owns no external handle by default.
+dotnet_diagnostic.CA1001.severity = none
+
+[AngelBossKey.Next.Win32/WindowVisibilityController.cs]
+# The operation gate shares the controller lifetime; the app drains operations before shutdown.
+dotnet_diagnostic.CA1001.severity = none
+
+[AngelBossKey.Next.Win32/NativeMethods.cs]
+# These Win32 APIs require mutable UTF-16 buffers; the current StringBuilder signatures are bounded.
+dotnet_diagnostic.CA1838.severity = none

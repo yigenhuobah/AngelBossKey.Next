@@ -114,7 +114,7 @@ public sealed class AutomationTriggerService : IAutomationTriggerService
         }
         catch (Exception exception)
         {
-            _log.Error("automation.idle", exception);
+            _log.LogError("automation.idle", exception);
         }
     }
 

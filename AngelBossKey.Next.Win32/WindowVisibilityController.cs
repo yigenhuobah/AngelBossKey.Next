@@ -17,7 +17,7 @@ public sealed class WindowVisibilityController(
     private readonly HashSet<long> _restoreShowSuppressions = [];
     private readonly IDiagnosticLog _log = diagnosticLog ?? NullDiagnosticLog.Instance;
     private readonly IWindowNativeActions _nativeActions = nativeActions ?? new WindowNativeActions();
-    private IReadOnlyCollection<TargetRule> _activeTargets = [];
+    private TargetRule[] _activeTargets = [];
     private bool _isHidden;
 
     public bool IsHidden => Volatile.Read(ref _isHidden);
@@ -260,7 +260,7 @@ public sealed class WindowVisibilityController(
             if (_hiddenWindows.Count == 0)
             {
                 await recoveryStore.ClearAsync(cancellationToken);
-                if (_activeTargets.Count == 0)
+                if (_activeTargets.Length == 0)
                 {
                     Volatile.Write(ref _isHidden, false);
                 }
@@ -278,7 +278,7 @@ public sealed class WindowVisibilityController(
             };
             _log.Info(
                 "rules.reconcile",
-                $"restored={restored.ChangedCount}; hidden={hidden.ChangedCount}; failed={result.FailedCount}; active={_activeTargets.Count}");
+                $"restored={restored.ChangedCount}; hidden={hidden.ChangedCount}; failed={result.FailedCount}; active={_activeTargets.Length}");
             return result;
         }
         finally
@@ -343,7 +343,7 @@ public sealed class WindowVisibilityController(
                 if (_hiddenWindows.Count == 0)
                 {
                     await recoveryStore.ClearAsync(cancellationToken);
-                    if (_activeTargets.Count == 0)
+                    if (_activeTargets.Length == 0)
                     {
                         Volatile.Write(ref _isHidden, false);
                         StateChanged?.Invoke(this, EventArgs.Empty);
@@ -476,7 +476,7 @@ public sealed class WindowVisibilityController(
                 if (_hiddenWindows.Count == 0)
                 {
                     await recoveryStore.ClearAsync(cancellationToken);
-                    if (_activeTargets.Count == 0)
+                    if (_activeTargets.Length == 0)
                     {
                         Volatile.Write(ref _isHidden, false);
                         StateChanged?.Invoke(this, EventArgs.Empty);
@@ -597,7 +597,7 @@ public sealed class WindowVisibilityController(
         };
     }
 
-    private HiddenWindowRecord? Capture(WindowInfo window)
+    private static HiddenWindowRecord? Capture(WindowInfo window)
     {
         var placement = new NativeMethods.WindowPlacement
         {

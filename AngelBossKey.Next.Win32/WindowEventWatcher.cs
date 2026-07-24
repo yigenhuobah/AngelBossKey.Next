@@ -96,7 +96,7 @@ public sealed class WindowEventWatcher : IDisposable
         }
         catch (Exception exception)
         {
-            _diagnosticLog.Error("windows.event", exception);
+            _diagnosticLog.LogError("windows.event", exception);
         }
     }
 }

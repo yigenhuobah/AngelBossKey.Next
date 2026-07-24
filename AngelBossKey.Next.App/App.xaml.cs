@@ -281,7 +281,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception exception)
         {
-            _diagnosticLog?.Error(eventName, exception);
+            _diagnosticLog?.LogError(eventName, exception);
         }
     }
 
@@ -337,7 +337,7 @@ public partial class App : System.Windows.Application
         if (sessionEnding)
         {
             try { _privacyDesktop?.ReturnAsync().GetAwaiter().GetResult(); }
-            catch (Exception exception) { _diagnosticLog?.Error("desktop.session-ending", exception); }
+            catch (Exception exception) { _diagnosticLog?.LogError("desktop.session-ending", exception); }
         }
         else
         {

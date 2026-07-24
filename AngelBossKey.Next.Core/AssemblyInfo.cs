@@ -1,33 +1,26 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.InteropServices;
-using System.Windows;
 
 [assembly: SuppressMessage(
     "Naming",
     "CA1716:Identifiers should not match keywords",
     Justification = "Next is part of the product namespace, not an API identifier.",
     Scope = "namespace",
-    Target = "~N:AngelBossKey.Next.App")]
+    Target = "~N:AngelBossKey.Next.Core.Abstractions")]
 [assembly: SuppressMessage(
     "Naming",
     "CA1716:Identifiers should not match keywords",
     Justification = "Next is part of the product namespace, not an API identifier.",
     Scope = "namespace",
-    Target = "~N:AngelBossKey.Next.App.Infrastructure")]
+    Target = "~N:AngelBossKey.Next.Core.Models")]
 [assembly: SuppressMessage(
     "Naming",
     "CA1716:Identifiers should not match keywords",
     Justification = "Next is part of the product namespace, not an API identifier.",
     Scope = "namespace",
-    Target = "~N:AngelBossKey.Next.App.Services")]
+    Target = "~N:AngelBossKey.Next.Core.Services")]
 [assembly: SuppressMessage(
     "Naming",
     "CA1716:Identifiers should not match keywords",
     Justification = "Next is part of the product namespace, not an API identifier.",
     Scope = "namespace",
-    Target = "~N:AngelBossKey.Next.App.ViewModels")]
-[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-[assembly: ThemeInfo(
-    ResourceDictionaryLocation.None,
-    ResourceDictionaryLocation.SourceAssembly
-)]
+    Target = "~N:AngelBossKey.Next.Core.Storage")]

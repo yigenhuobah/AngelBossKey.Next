@@ -32,7 +32,7 @@ public sealed class WindowCatalog : IWindowCatalog
 
     public WindowInfo? TryGetWindow(long handle) => TryGetWindowCore((nint)handle, requireVisible: false);
 
-    private WindowInfo? TryGetWindowCore(nint window, bool requireVisible)
+    private static WindowInfo? TryGetWindowCore(nint window, bool requireVisible)
     {
         if (window == 0 ||
             !NativeMethods.IsWindow(window) ||

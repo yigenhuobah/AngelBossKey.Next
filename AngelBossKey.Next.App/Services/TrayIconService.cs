@@ -1,5 +1,3 @@
-using AngelBossKey.Next.App.ViewModels;
-using System.Drawing;
 using System.Drawing.Drawing2D;
 using Forms = System.Windows.Forms;
 
@@ -8,6 +6,7 @@ namespace AngelBossKey.Next.App.Services;
 public sealed class TrayIconService : IDisposable
 {
     private readonly Forms.NotifyIcon _notifyIcon;
+    private readonly Forms.ContextMenuStrip _menu;
     private readonly Icon _readyIcon;
     private readonly Icon _hiddenIcon;
     private readonly Forms.ToolStripMenuItem _toggleItem;
@@ -24,20 +23,20 @@ public sealed class TrayIconService : IDisposable
         _readyIcon = CreateIcon(Color.FromArgb(20, 125, 100));
         _hiddenIcon = CreateIcon(Color.FromArgb(182, 106, 24));
 
-        var menu = new Forms.ContextMenuStrip();
-        menu.Items.Add("打开主界面", null, (_, _) => showWindow());
+        _menu = new Forms.ContextMenuStrip();
+        _menu.Items.Add("打开主界面", null, (_, _) => showWindow());
         _sceneMenu = new Forms.ToolStripMenuItem("场景");
-        menu.Items.Add(_sceneMenu);
+        _menu.Items.Add(_sceneMenu);
         _toggleItem = new Forms.ToolStripMenuItem("隐藏目标", null, (_, _) => toggleVisibility());
-        menu.Items.Add(_toggleItem);
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => exit());
+        _menu.Items.Add(_toggleItem);
+        _menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add("退出", null, (_, _) => exit());
 
         _notifyIcon = new Forms.NotifyIcon
         {
             Text = "天使老板键 Next - 保护就绪",
             Icon = _readyIcon,
-            ContextMenuStrip = menu,
+            ContextMenuStrip = _menu,
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => showWindow();
@@ -80,6 +79,9 @@ public sealed class TrayIconService : IDisposable
     {
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _toggleItem.Dispose();
+        _sceneMenu.Dispose();
+        _menu.Dispose();
         _readyIcon.Dispose();
         _hiddenIcon.Dispose();
         GC.SuppressFinalize(this);

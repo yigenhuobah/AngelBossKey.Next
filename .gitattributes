@@ -2,5 +2,9 @@
 *.cs text eol=lf
 *.xaml text eol=lf
 *.csproj text eol=lf
+*.props text eol=lf
 *.slnx text eol=lf
 *.md text eol=lf
+*.ps1 text eol=lf
+.editorconfig text eol=lf
+.gitattributes text eol=lf

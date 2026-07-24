@@ -29,7 +29,7 @@ public static class IconLoader
         return CreateFallback();
     }
 
-    private static ImageSource CreateFallback()
+    private static DrawingImage CreateFallback()
     {
         var group = new DrawingGroup();
         using (var context = group.Open())

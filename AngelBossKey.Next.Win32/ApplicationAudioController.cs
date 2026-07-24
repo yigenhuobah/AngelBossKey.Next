@@ -13,7 +13,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     private readonly IAudioSessionBackend _backend;
     private readonly PeriodicTimer _timer;
     private readonly CancellationTokenSource _shutdown = new();
-    private IReadOnlyCollection<TargetRule> _activeTargets = [];
+    private TargetRule[] _activeTargets = [];
     private Task? _monitorTask;
     private bool _disposed;
     private bool _isActive;
@@ -62,10 +62,10 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         {
             _activeTargets = targets.Where(target => target.Enabled && target.MuteWhenHidden).ToArray();
             var changed = await CaptureAndMuteAsync(cancellationToken);
-            Volatile.Write(ref _isActive, _activeTargets.Count > 0);
+            Volatile.Write(ref _isActive, _activeTargets.Length > 0);
             EnsureMonitorStarted();
 
-            _log.Info("audio.mute", $"sessions={changed}; targets={_activeTargets.Count}");
+            _log.Info("audio.mute", $"sessions={changed}; targets={_activeTargets.Length}");
             return changed;
         }
         finally
@@ -95,9 +95,9 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             }
             catch (Exception exception)
             {
-                _log.Error("audio.reconcile", exception);
+                _log.LogError("audio.reconcile", exception);
             }
-            Volatile.Write(ref _isActive, _activeTargets.Count > 0);
+            Volatile.Write(ref _isActive, _activeTargets.Length > 0);
         }
         finally
         {
@@ -123,7 +123,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             }
             catch (Exception exception)
             {
-                _log.Error("audio.restore", exception);
+                _log.LogError("audio.restore", exception);
                 await SaveOrClearJournalAsync(cancellationToken);
                 EnsureMonitorStarted();
                 return 0;
@@ -157,7 +157,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             }
             catch (Exception exception)
             {
-                _log.Error("audio.recover", exception);
+                _log.LogError("audio.recover", exception);
                 await SaveOrClearJournalAsync(cancellationToken);
                 EnsureMonitorStarted();
                 return 0;
@@ -178,7 +178,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         try { _monitorTask?.GetAwaiter().GetResult(); }
         catch (OperationCanceledException) { }
         try { RestoreAsync().GetAwaiter().GetResult(); }
-        catch (Exception exception) { _log.Error("audio.dispose", exception); }
+        catch (Exception exception) { _log.LogError("audio.dispose", exception); }
         _shutdown.Dispose();
         _gate.Dispose();
         GC.SuppressFinalize(this);
@@ -193,7 +193,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                 await _gate.WaitAsync(cancellationToken);
                 try
                 {
-                    if (_activeTargets.Count > 0)
+                    if (_activeTargets.Length > 0)
                     {
                         await CaptureAndMuteAsync(cancellationToken);
                     }
@@ -211,7 +211,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                 }
                 catch (Exception exception)
                 {
-                    _log.Error("audio.monitor", exception);
+                    _log.LogError("audio.monitor", exception);
                 }
                 finally
                 {
@@ -226,7 +226,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
 
     private void EnsureMonitorStarted()
     {
-        if ((_activeTargets.Count > 0 || _savedSessions.Count > 0) && _monitorTask is null)
+        if ((_activeTargets.Length > 0 || _savedSessions.Count > 0) && _monitorTask is null)
         {
             _monitorTask = MonitorAsync(_shutdown.Token);
         }
@@ -234,7 +234,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
 
     private async Task<int> CaptureAndMuteAsync(CancellationToken cancellationToken)
     {
-        if (_activeTargets.Count == 0) return 0;
+        if (_activeTargets.Length == 0) return 0;
         var captured = 0;
         try
         {
@@ -260,7 +260,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         }
         catch (Exception exception)
         {
-            _log.Error("audio.enumerate", exception);
+            _log.LogError("audio.enumerate", exception);
             return 0;
         }
     }

@@ -2,6 +2,7 @@ using AngelBossKey.Next.Win32;
 using AngelBossKey.Next.App.Services;
 using AngelBossKey.Next.Core.Models;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Interop;
@@ -181,7 +182,7 @@ public partial class PrivacyShellWindow : Window
     private void UpdateClock()
     {
         var now = DateTime.Now;
-        ClockText.Text = now.ToString("HH:mm");
-        DateText.Text = now.ToString("yyyy年M月d日 dddd");
+        ClockText.Text = now.ToString("HH:mm", CultureInfo.CurrentCulture);
+        DateText.Text = now.ToString("yyyy年M月d日 dddd", CultureInfo.CurrentCulture);
     }
 }
