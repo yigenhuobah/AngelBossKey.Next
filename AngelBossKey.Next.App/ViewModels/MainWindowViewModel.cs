@@ -310,6 +310,24 @@ public sealed class MainWindowViewModel : ObservableObject
 
     public async Task FlushSettingsAsync()
     {
+        await _hotkeyChangeGate.WaitAsync();
+        _hotkeyChangeGate.Release();
+
+        await _ruleChangeGate.WaitAsync();
+        try
+        {
+            await PersistTargetsAsync();
+        }
+        catch (Exception exception)
+        {
+            _diagnosticLog.Error("settings.flush", exception);
+            Message = $"保存设置失败：{exception.Message}";
+        }
+        finally
+        {
+            _ruleChangeGate.Release();
+        }
+
         Task pending;
         lock (_settingsSaveSync)
         {

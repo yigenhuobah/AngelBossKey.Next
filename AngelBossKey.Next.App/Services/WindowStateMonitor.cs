@@ -28,15 +28,22 @@ public sealed class WindowStateMonitor(
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                await visibilityController.SelfCheckAsync(cancellationToken);
+                try
+                {
+                    await visibilityController.SelfCheckAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    diagnosticLog.Error("windows.monitor", exception);
+                }
             }
         }
         catch (OperationCanceledException)
         {
-        }
-        catch (Exception exception)
-        {
-            diagnosticLog.Error("windows.monitor", exception);
         }
     }
 }
