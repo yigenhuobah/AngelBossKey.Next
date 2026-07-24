@@ -23,7 +23,14 @@ internal static partial class NativeMethods
     internal const int WmMouseWheel = 0x020A;
     internal const int WmXButtonDown = 0x020B;
     internal const int WmHotkey = 0x0312;
+    internal const int WmClose = 0x0010;
     internal const int WmQuit = 0x0012;
+    internal const uint CreateUnicodeEnvironment = 0x00000400;
+    internal const uint CreateSuspended = 0x00000004;
+    internal const uint WaitTimeout = 0x00000102;
+    internal const uint PmNoRemove = 0x0000;
+    internal const uint JobObjectLimitKillOnJobClose = 0x00002000;
+    internal const int JobObjectExtendedLimitInformation = 9;
     internal const uint DesktopReadObjects = 0x0001;
     internal const uint DesktopCreateWindow = 0x0002;
     internal const uint DesktopWriteObjects = 0x0080;
@@ -111,9 +118,84 @@ internal static partial class NativeMethods
         internal uint Private;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct StartupInfo
+    {
+        internal uint Size;
+        internal string? Reserved;
+        internal string? Desktop;
+        internal string? Title;
+        internal uint X;
+        internal uint Y;
+        internal uint XSize;
+        internal uint YSize;
+        internal uint XCountChars;
+        internal uint YCountChars;
+        internal uint FillAttribute;
+        internal uint Flags;
+        internal ushort ShowWindow;
+        internal ushort Reserved2Size;
+        internal nint Reserved2;
+        internal nint StandardInput;
+        internal nint StandardOutput;
+        internal nint StandardError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ProcessInformation
+    {
+        internal nint Process;
+        internal nint Thread;
+        internal uint ProcessId;
+        internal uint ThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JobObjectBasicLimitInformation
+    {
+        internal long PerProcessUserTimeLimit;
+        internal long PerJobUserTimeLimit;
+        internal uint LimitFlags;
+        internal nuint MinimumWorkingSetSize;
+        internal nuint MaximumWorkingSetSize;
+        internal uint ActiveProcessLimit;
+        internal nuint Affinity;
+        internal uint PriorityClass;
+        internal uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct IoCounters
+    {
+        internal ulong ReadOperationCount;
+        internal ulong WriteOperationCount;
+        internal ulong OtherOperationCount;
+        internal ulong ReadTransferCount;
+        internal ulong WriteTransferCount;
+        internal ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JobObjectExtendedLimitInformationData
+    {
+        internal JobObjectBasicLimitInformation BasicLimitInformation;
+        internal IoCounters IoInfo;
+        internal nuint ProcessMemoryLimit;
+        internal nuint JobMemoryLimit;
+        internal nuint PeakProcessMemoryUsed;
+        internal nuint PeakJobMemoryUsed;
+    }
+
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool EnumWindows(EnumWindowsProc callback, nint parameter);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool EnumDesktopWindows(
+        nint desktop,
+        EnumWindowsProc callback,
+        nint parameter);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -226,6 +308,15 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PeekMessageW(
+        ref Message message,
+        nint window,
+        uint minimum,
+        uint maximum,
+        uint removeMessage);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool TranslateMessage(in Message message);
 
     [LibraryImport("user32.dll")]
@@ -234,6 +325,10 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool PostThreadMessageW(uint threadId, uint message, nuint wParam, nint lParam);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool PostMessageW(nint window, uint message, nuint wParam, nint lParam);
 
     [LibraryImport("kernel32.dll")]
     internal static partial uint GetCurrentThreadId();
@@ -265,6 +360,49 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool CloseHandle(nint handle);
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CreateProcess(
+        string? applicationName,
+        StringBuilder commandLine,
+        nint processAttributes,
+        nint threadAttributes,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+        uint creationFlags,
+        nint environment,
+        string? currentDirectory,
+        ref StartupInfo startupInfo,
+        out ProcessInformation processInformation);
+
+    [LibraryImport("kernel32.dll")]
+    internal static partial uint WaitForSingleObject(nint handle, uint milliseconds);
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool TerminateProcess(nint process, uint exitCode);
+
+    [LibraryImport(
+        "kernel32.dll",
+        EntryPoint = "CreateJobObjectW",
+        SetLastError = true,
+        StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint CreateJobObject(nint jobAttributes, string? name);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetInformationJobObject(
+        nint job,
+        int informationClass,
+        ref JobObjectExtendedLimitInformationData information,
+        uint informationLength);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AssignProcessToJobObject(nint job, nint process);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    internal static partial uint ResumeThread(nint thread);
 
     [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -16,7 +16,9 @@ Windows API，不注入其他进程、不远程写内存、不联网，也不默
 - 可选短生命周期 Elevated Broker。仅在操作高权限窗口时显示 UAC，通过当前用户专用
   命名管道接受查询、隐藏和恢复请求，完成一次请求后退出。
 - 可选独立隐私桌面，使用 `CreateDesktop` / `SetThreadDesktop` / `SwitchDesktop`；
-  `Ctrl+Alt+Shift+F12` 为紧急返回键。
+  进入前启动并验证独立的轻量 Shell，提供程序启动和返回入口；
+  `Ctrl+Alt+Shift+F12` 为紧急返回键。Windows Explorer 不作为该模式的 Shell，避免其
+  单实例机制把窗口转回原桌面后留下黑屏。
 - 不把独立桌面描述为 Windows 任务视图虚拟桌面，也不承诺兼容反作弊、独占全屏或
   系统安全桌面。检测到全屏前台窗口时会拒绝切换。
 

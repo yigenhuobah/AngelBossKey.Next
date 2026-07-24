@@ -11,10 +11,11 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
     private const uint F12VirtualKey = 0x7B;
     private readonly IDiagnosticLog _log;
     private readonly nint _originalDesktop;
-    private readonly TaskCompletionSource<nint> _desktopReady =
+    private readonly TaskCompletionSource<DesktopContext> _desktopReady =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread _desktopThread;
     private readonly ManualResetEventSlim _threadStarted = new();
+    private readonly CancellationTokenSource _shutdown = new();
     private uint _desktopThreadId;
     private bool _isActive;
     private bool _disposed;
@@ -49,17 +50,21 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             return (false, compatibility);
         }
 
-        nint desktop;
+        DesktopContext context;
         try
         {
-            desktop = await _desktopReady.Task.WaitAsync(cancellationToken);
+            context = await _desktopReady.Task.WaitAsync(cancellationToken);
+            var shell = await Task.Run(
+                () => context.Shell.EnsureReady(cancellationToken),
+                cancellationToken);
+            if (!shell.Success) return shell;
         }
         catch (Exception exception)
         {
             return (false, $"独立桌面初始化失败：{exception.Message}");
         }
 
-        if (desktop == 0 || !NativeMethods.SwitchDesktop(desktop))
+        if (context.Desktop == 0 || !NativeMethods.SwitchDesktop(context.Desktop))
         {
             _log.Warning("desktop.switch", $"failed=true; error={Marshal.GetLastWin32Error()}");
             if (_originalDesktop != 0)
@@ -70,6 +75,13 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         }
 
         Volatile.Write(ref _isActive, true);
+        if (!context.Shell.IsReady)
+        {
+            if (_originalDesktop != 0) NativeMethods.SwitchDesktop(_originalDesktop);
+            Volatile.Write(ref _isActive, false);
+            _log.Warning("desktop.switch", "shell-exited-before-confirmation=true");
+            return (false, "隐私桌面 Shell 在切换时已退出，已自动返回原桌面。");
+        }
         StateChanged?.Invoke(this, EventArgs.Empty);
         _log.Info("desktop.enter", "success=true");
         return (true, "已进入独立隐私桌面。按 Ctrl+Alt+Shift+F12 紧急返回。");
@@ -106,22 +118,36 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         {
             NativeMethods.SwitchDesktop(_originalDesktop);
         }
-        _threadStarted.Wait(TimeSpan.FromSeconds(2));
-        try { _desktopReady.Task.Wait(TimeSpan.FromSeconds(2)); }
-        catch (AggregateException) { }
-        if (_desktopThreadId != 0)
+        _shutdown.Cancel();
+        var started = _threadStarted.Wait(TimeSpan.FromSeconds(2));
+        if (started && _desktopThreadId != 0)
         {
             NativeMethods.PostThreadMessageW(_desktopThreadId, NativeMethods.WmQuit, 0, 0);
-            _desktopThread.Join(TimeSpan.FromSeconds(2));
         }
-        _threadStarted.Dispose();
+        var stopped = started && _desktopThread.Join(TimeSpan.FromSeconds(5));
+        if (stopped)
+        {
+            _threadStarted.Dispose();
+            _shutdown.Dispose();
+        }
+        else
+        {
+            _log.Warning("desktop.dispose", "thread-stop-timeout=true");
+        }
         GC.SuppressFinalize(this);
     }
 
     private void DesktopThreadMain()
     {
         _desktopThreadId = NativeMethods.GetCurrentThreadId();
+        var queueProbe = new NativeMethods.Message();
+        NativeMethods.PeekMessageW(ref queueProbe, 0, 0, 0, NativeMethods.PmNoRemove);
         _threadStarted.Set();
+        if (_shutdown.IsCancellationRequested)
+        {
+            _desktopReady.TrySetCanceled(_shutdown.Token);
+            return;
+        }
         var threadOriginalDesktop = NativeMethods.GetThreadDesktop(_desktopThreadId);
         var access = NativeMethods.DesktopReadObjects |
             NativeMethods.DesktopCreateWindow |
@@ -153,32 +179,84 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             return;
         }
 
-        _desktopReady.TrySetResult(desktop);
-        var message = new NativeMethods.Message();
-        while (NativeMethods.GetMessageW(ref message, 0, 0, 0) > 0)
+        var shell = new DesktopShellHost(
+            desktop,
+            $"AngelBossKey.Next.{Environment.ProcessId}",
+            _desktopThreadId,
+            _log);
+        shell.Exited += (_, _) =>
+            NativeMethods.PostThreadMessageW(
+                _desktopThreadId,
+                PrivacyDesktopShellBridge.ShellExitedMessage,
+                0,
+                0);
+        try
         {
-            if (message.Id == NativeMethods.WmHotkey && (int)message.WParam == EmergencyHotkeyId)
+            _desktopReady.TrySetResult(new DesktopContext(desktop, shell));
+            var message = new NativeMethods.Message();
+            while (!_shutdown.IsCancellationRequested &&
+                NativeMethods.GetMessageW(ref message, 0, 0, 0) > 0)
             {
-                if (_originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
+                if (message.Id == NativeMethods.WmHotkey && (int)message.WParam == EmergencyHotkeyId)
                 {
-                    MarkReturned("desktop.emergency-return");
+                    if (_originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
+                    {
+                        MarkReturned("desktop.emergency-return");
+                    }
+                    continue;
                 }
-                continue;
+
+                if (message.Id == PrivacyDesktopShellBridge.ReturnRequestMessage)
+                {
+                    var shellWindow = (nint)message.WParam;
+                    var returned = _originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop);
+                    if (returned)
+                    {
+                        MarkReturned("desktop.shell-return");
+                    }
+                    var acknowledged = NativeMethods.PostMessageW(
+                        shellWindow,
+                        returned
+                            ? PrivacyDesktopShellBridge.ReturnSucceededMessage
+                            : PrivacyDesktopShellBridge.ReturnFailedMessage,
+                        0,
+                        0);
+                    if (returned && !acknowledged) shell.Reset();
+                    continue;
+                }
+
+                if (message.Id == PrivacyDesktopShellBridge.ShellExitedMessage)
+                {
+                    if (_originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
+                    {
+                        MarkReturned("desktop.shell-exited");
+                    }
+                    continue;
+                }
+
+                NativeMethods.TranslateMessage(in message);
+                NativeMethods.DispatchMessageW(in message);
             }
-
-            NativeMethods.TranslateMessage(in message);
-            NativeMethods.DispatchMessageW(in message);
         }
-
-        NativeMethods.UnregisterHotKey(0, EmergencyHotkeyId);
-        NativeMethods.SetThreadDesktop(threadOriginalDesktop);
-        NativeMethods.CloseDesktop(desktop);
+        finally
+        {
+            if (_originalDesktop != 0) NativeMethods.SwitchDesktop(_originalDesktop);
+            MarkReturned("desktop.thread-stop");
+            NativeMethods.UnregisterHotKey(0, EmergencyHotkeyId);
+            shell.Dispose();
+            NativeMethods.SetThreadDesktop(threadOriginalDesktop);
+            NativeMethods.CloseDesktop(desktop);
+        }
     }
+
+    private sealed record DesktopContext(nint Desktop, DesktopShellHost Shell);
 
     private void MarkReturned(string eventName)
     {
+        var wasActive = Volatile.Read(ref _isActive);
         Volatile.Write(ref _isActive, false);
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        if (!wasActive) return;
+        if (!_disposed) StateChanged?.Invoke(this, EventArgs.Empty);
         _log.Info(eventName, "success=true");
     }
 

@@ -38,6 +38,18 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        var privacyShellIndex = Array.FindIndex(e.Args, argument =>
+            string.Equals(argument, "--privacy-shell", StringComparison.OrdinalIgnoreCase));
+        if (privacyShellIndex >= 0 && e.Args.Length > privacyShellIndex + 1 &&
+            uint.TryParse(e.Args[privacyShellIndex + 1], out var ownerThreadId))
+        {
+            ShutdownMode = ShutdownMode.OnMainWindowClose;
+            var shell = new PrivacyShellWindow(ownerThreadId);
+            MainWindow = shell;
+            shell.Show();
+            return;
+        }
+
         var brokerIndex = Array.FindIndex(e.Args, argument =>
             string.Equals(argument, "--elevated-broker", StringComparison.OrdinalIgnoreCase));
         if (brokerIndex >= 0 && e.Args.Length >= brokerIndex + 3)
