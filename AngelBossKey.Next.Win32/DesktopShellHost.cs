@@ -63,6 +63,15 @@ internal sealed class DesktopShellHost(
         }
     }
 
+    internal void Stop()
+    {
+        lock (_sync)
+        {
+            if (_disposed) return;
+            StopShell();
+        }
+    }
+
     internal (bool Success, string Message) EnsureReady(CancellationToken cancellationToken)
     {
         lock (_sync)

@@ -86,6 +86,7 @@ public sealed class ViewModelBehaviorTests
 
         Assert.True(SpinWait.SpinUntil(() => store.LastSaved is not null, TimeSpan.FromSeconds(3)));
         Assert.Equal(["Second", "First"], store.LastSaved!.Targets.Select(target => target.DisplayName));
+        Assert.Equal(7, store.LastSaved.SchemaVersion);
     }
 
     [Fact]
@@ -194,6 +195,19 @@ public sealed class ViewModelBehaviorTests
 
         Assert.True(SpinWait.SpinUntil(
             () => store.LastSaved?.Scenes.Single().Targets.Single().MuteWhenHidden == true,
+            TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public void PrivacyShellMode_IsPersistedWithTheActiveScene()
+    {
+        var store = new MemorySettingsStore();
+        var viewModel = CreateViewModel(store, new FakeVisibilityController());
+
+        viewModel.SelectedScene.PrivacyShellMode = PrivacyDesktopShellMode.Compatibility;
+
+        Assert.True(SpinWait.SpinUntil(
+            () => store.LastSaved?.Scenes.Single().PrivacyShellMode == PrivacyDesktopShellMode.Compatibility,
             TimeSpan.FromSeconds(3)));
     }
 
@@ -351,6 +365,7 @@ public sealed class ViewModelBehaviorTests
         {
             Name = "Privacy",
             Mode = SceneMode.PrivacyDesktop,
+            PrivacyShellMode = PrivacyDesktopShellMode.Compatibility,
             Hotkey = new HotkeyGesture { Modifiers = HotkeyModifiers.Control, VirtualKey = 0x31 },
             Targets =
             [
@@ -358,19 +373,21 @@ public sealed class ViewModelBehaviorTests
             ]
         };
         var controller = new FakeVisibilityController();
+        var privacyDesktop = new FailingPrivacyDesktopService();
         var viewModel = new MainWindowViewModel(
             new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
             new MemorySettingsStore(),
             controller,
             new FakeStartupRegistration(),
             new GlobalHotkeyService(),
-            privacyDesktop: new FailingPrivacyDesktopService());
+            privacyDesktop: privacyDesktop);
 
         var result = await viewModel.ToggleVisibilityAsync();
 
         Assert.Equal(1, controller.HideCalls);
         Assert.True(controller.IsHidden);
         Assert.Contains("回退为普通窗口隐藏", result.Detail);
+        Assert.Equal(PrivacyDesktopShellMode.Compatibility, privacyDesktop.LastShellMode);
     }
 
     private static MainWindowViewModel CreateViewModel(
@@ -549,10 +566,16 @@ public sealed class ViewModelBehaviorTests
 
     private sealed class FailingPrivacyDesktopService : IPrivacyDesktopService
     {
+        public PrivacyDesktopShellMode? LastShellMode { get; private set; }
         public bool IsActive => false;
         public event EventHandler? StateChanged { add { } remove { } }
-        public Task<(bool Success, string Message)> EnterAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult((false, "桌面切换失败。"));
+        public Task<(bool Success, string Message)> EnterAsync(
+            PrivacyDesktopShellMode shellMode,
+            CancellationToken cancellationToken = default)
+        {
+            LastShellMode = shellMode;
+            return Task.FromResult((false, "桌面切换失败。"));
+        }
         public Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult((true, "已返回。"));
         public void Dispose() { }

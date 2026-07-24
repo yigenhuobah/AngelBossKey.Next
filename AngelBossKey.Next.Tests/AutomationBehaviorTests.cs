@@ -39,6 +39,17 @@ public sealed class AutomationBehaviorTests
     }
 
     [Fact]
+    public void ExplorerDesktopShell_QuotesExecutableAndRecognizesRequiredWindows()
+    {
+        var command = ExplorerDesktopShellHost.BuildCommandLine(@"C:\Windows\explorer.exe");
+
+        Assert.Equal("\"C:\\Windows\\explorer.exe\"", command);
+        Assert.True(ExplorerDesktopShellHost.IsRequiredShellClass("Shell_TrayWnd"));
+        Assert.True(ExplorerDesktopShellHost.IsRequiredShellClass("Progman"));
+        Assert.False(ExplorerDesktopShellHost.IsRequiredShellClass("WorkerW"));
+    }
+
+    [Fact]
     public async Task DesktopShell_RestartsAfterUnexpectedExitWithoutSwitchingDesktop()
     {
         var desktopName = $"AngelBossKey.Next.Test.{Guid.NewGuid():N}";

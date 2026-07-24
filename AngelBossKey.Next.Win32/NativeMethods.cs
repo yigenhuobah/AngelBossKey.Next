@@ -6,6 +6,8 @@ namespace AngelBossKey.Next.Win32;
 internal static partial class NativeMethods
 {
     internal const uint ProcessQueryLimitedInformation = 0x1000;
+    internal const uint ProcessTerminate = 0x0001;
+    internal const uint Synchronize = 0x00100000;
     internal const uint TokenQuery = 0x0008;
     internal const int TokenElevation = 20;
     internal const uint EventObjectDestroy = 0x8001;
@@ -207,6 +209,9 @@ internal static partial class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern int GetWindowTextW(nint window, StringBuilder text, int maximumCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int GetClassNameW(nint window, StringBuilder className, int maximumCount);
 
     [LibraryImport("user32.dll")]
     internal static partial int GetWindowTextLengthW(nint window);

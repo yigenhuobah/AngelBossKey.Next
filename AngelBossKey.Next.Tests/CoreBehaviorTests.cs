@@ -110,7 +110,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(6, loaded.SchemaVersion);
+        Assert.Equal(7, loaded.SchemaVersion);
         Assert.False(loaded.Hotkey.IsConfigured);
         Assert.Empty(loaded.Targets);
     }
@@ -139,8 +139,10 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Single(loaded.Scenes);
+        Assert.Equal(7, loaded.SchemaVersion);
+        var scene = Assert.Single(loaded.Scenes);
         Assert.False(loaded.Hotkey.IsConfigured);
+        Assert.Equal(PrivacyDesktopShellMode.FullExplorer, scene.PrivacyShellMode);
     }
 
     [Fact]
@@ -154,7 +156,7 @@ public sealed class CoreBehaviorTests : IDisposable
 
         var loaded = await new JsonSettingsStore(path).LoadAsync();
 
-        Assert.Equal(6, loaded.SchemaVersion);
+        Assert.Equal(7, loaded.SchemaVersion);
         var scene = Assert.Single(loaded.Scenes);
         Assert.Equal("默认场景", scene.Name);
         var rule = Assert.Single(loaded.Targets);
@@ -195,6 +197,7 @@ public sealed class CoreBehaviorTests : IDisposable
         {
             Name = "桌面",
             Mode = SceneMode.PrivacyDesktop,
+            PrivacyShellMode = PrivacyDesktopShellMode.Compatibility,
             Hotkey = new HotkeyGesture
             {
                 Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift,
@@ -211,13 +214,14 @@ public sealed class CoreBehaviorTests : IDisposable
         });
         var loaded = await store.LoadAsync();
 
-        Assert.Equal(6, loaded.SchemaVersion);
+        Assert.Equal(7, loaded.SchemaVersion);
         Assert.Equal(second.Id, loaded.ActiveSceneId);
         Assert.True(loaded.EnableElevatedBroker);
         Assert.Equal(2, loaded.Scenes.Count);
         Assert.True(loaded.Scenes[0].Targets[0].MuteWhenHidden);
         Assert.Equal(MouseAutomationTrigger.XButton1, loaded.Scenes[0].Automation.MouseTrigger);
         Assert.Equal(SceneMode.PrivacyDesktop, loaded.Scenes[1].Mode);
+        Assert.Equal(PrivacyDesktopShellMode.Compatibility, loaded.Scenes[1].PrivacyShellMode);
     }
 
     [Fact]

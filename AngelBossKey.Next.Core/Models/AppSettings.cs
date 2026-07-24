@@ -2,7 +2,7 @@ namespace AngelBossKey.Next.Core.Models;
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 6;
+    public int SchemaVersion { get; init; } = 7;
     // Kept for lossless migration from v0.1/v0.2 settings.
     public HotkeyGesture Hotkey { get; init; } = new();
     public List<TargetRule> Targets { get; init; } = [];
@@ -17,6 +17,12 @@ public enum SceneMode
 {
     HideWindows,
     PrivacyDesktop
+}
+
+public enum PrivacyDesktopShellMode
+{
+    FullExplorer,
+    Compatibility
 }
 
 public enum MouseAutomationTrigger
@@ -56,4 +62,5 @@ public sealed record SceneProfile
     public List<TargetRule> Targets { get; init; } = [];
     public AutomationSettings Automation { get; init; } = new();
     public SceneMode Mode { get; init; }
+    public PrivacyDesktopShellMode PrivacyShellMode { get; init; } = PrivacyDesktopShellMode.FullExplorer;
 }

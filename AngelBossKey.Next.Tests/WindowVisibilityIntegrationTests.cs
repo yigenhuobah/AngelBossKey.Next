@@ -219,10 +219,11 @@ public sealed class WindowVisibilityIntegrationTests
 
         try
         {
+            var actions = new ControlledDelayedHideWindowActions();
             var controller = new WindowVisibilityController(
                 new FixedWindowCatalog(window),
                 new JsonRecoveryStore(journalPath),
-                nativeActions: new DelayedHideWindowActions(TimeSpan.FromMilliseconds(750)));
+                nativeActions: actions);
             var result = await controller.HideAsync(
             [
                 new TargetRule { DisplayName = "Delayed", ExecutablePath = window.ExecutablePath }
@@ -232,6 +233,7 @@ public sealed class WindowVisibilityIntegrationTests
             Assert.Equal(1, result.FailedCount);
             Assert.True(File.Exists(journalPath));
 
+            actions.CompleteHide();
             Assert.True(SpinWait.SpinUntil(
                 () => !NativeMethods.IsWindowVisible((nint)window.Handle),
                 TimeSpan.FromSeconds(3)));
@@ -387,10 +389,14 @@ public sealed class WindowVisibilityIntegrationTests
         public WindowInfo? TryGetWindow(long handle) => windows.FirstOrDefault(window => window.Handle == handle);
     }
 
-    private sealed class DelayedHideWindowActions(TimeSpan delay) : IWindowNativeActions
+    private sealed class ControlledDelayedHideWindowActions : IWindowNativeActions
     {
+        private readonly TaskCompletionSource _hideRequested =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public bool Exists(long handle) => NativeMethods.IsWindow((nint)handle);
         public bool IsVisible(long handle) => NativeMethods.IsWindowVisible((nint)handle);
+        public void CompleteHide() => _hideRequested.TrySetResult();
         public void RequestShow(long handle, int command)
         {
             if (command != NativeMethods.SwHide)
@@ -401,7 +407,7 @@ public sealed class WindowVisibilityIntegrationTests
 
             _ = Task.Run(async () =>
             {
-                await Task.Delay(delay);
+                await _hideRequested.Task;
                 _ = NativeMethods.ShowWindowAsync((nint)handle, command);
             });
         }

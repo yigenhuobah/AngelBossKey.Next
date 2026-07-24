@@ -85,7 +85,8 @@ public partial class App : System.Windows.Application
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AngelBossKey.Next");
         _diagnosticLog = new RollingDiagnosticLog(Path.Combine(dataDirectory, "logs"));
-        _diagnosticLog.Info("app.start", $"version=0.6.0; background={e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase)}");
+        var appVersion = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        _diagnosticLog.Info("app.start", $"version={appVersion}; background={e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase)}");
         var settingsStore = new JsonSettingsStore(Path.Combine(dataDirectory, "settings.json"));
         var recoveryStore = new JsonRecoveryStore(Path.Combine(dataDirectory, "recovery.json"));
         var audioRecoveryStore = new JsonAudioRecoveryStore(Path.Combine(dataDirectory, "audio-recovery.json"));

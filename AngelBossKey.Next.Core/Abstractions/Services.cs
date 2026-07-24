@@ -89,6 +89,8 @@ public interface IPrivacyDesktopService : IDisposable
 {
     bool IsActive { get; }
     event EventHandler? StateChanged;
-    Task<(bool Success, string Message)> EnterAsync(CancellationToken cancellationToken = default);
+    Task<(bool Success, string Message)> EnterAsync(
+        PrivacyDesktopShellMode shellMode,
+        CancellationToken cancellationToken = default);
     Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default);
 }

@@ -97,9 +97,19 @@
             <TextBox Grid.Column="5" Text="{Binding SelectedScene.Name, UpdateSourceTrigger=LostFocus}"
                      MaxWidth="260" HorizontalAlignment="Left" VerticalAlignment="Center" Padding="8,5"
                      ToolTip="场景名称" AutomationProperties.Name="场景名称" />
-            <CheckBox Grid.Column="6" Content="独立隐私桌面"
-                      IsChecked="{Binding SelectedScene.IsPrivacyDesktop, Mode=TwoWay}"
-                      Margin="20,0,24,0" ToolTip="使用 Win32 独立 Desktop；不兼容安全桌面、反作弊和独占全屏" />
+            <StackPanel Grid.Column="6" Orientation="Horizontal" Margin="20,0,24,0">
+                <CheckBox Content="独立隐私桌面"
+                          IsChecked="{Binding SelectedScene.IsPrivacyDesktop, Mode=TwoWay}"
+                          VerticalAlignment="Center"
+                          ToolTip="使用 Win32 独立 Desktop；不兼容安全桌面、反作弊和独占全屏" />
+                <ComboBox ItemsSource="{Binding PrivacyDesktopShellOptions}"
+                          DisplayMemberPath="Label" SelectedValuePath="Value"
+                          SelectedValue="{Binding SelectedScene.PrivacyShellMode}"
+                          IsEnabled="{Binding SelectedScene.IsPrivacyDesktop}"
+                          Width="178" Height="34" Margin="12,0,0,0"
+                          ToolTip="完整桌面优先启动 Explorer，失败时自动回退到轻量 Shell"
+                          AutomationProperties.Name="独立桌面模式" />
+            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="3" Margin="24,0" VerticalAlignment="Center">

@@ -13,7 +13,7 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
         try
         {
             var settings = await AtomicJsonStore.ReadAsync<AppSettings>(path, cancellationToken);
-            if (settings is null || settings.SchemaVersion is < 1 or > 6)
+            if (settings is null || settings.SchemaVersion is < 1 or > 7)
             {
                 return CreateDefaults();
             }
@@ -26,7 +26,10 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
                     Name = string.IsNullOrWhiteSpace(scene.Name) ? "未命名场景" : scene.Name.Trim(),
                     Hotkey = scene.Hotkey ?? new HotkeyGesture(),
                     Targets = NormalizeTargets(scene.Targets),
-                    Automation = NormalizeAutomation(scene.Automation)
+                    Automation = NormalizeAutomation(scene.Automation),
+                    PrivacyShellMode = Enum.IsDefined(scene.PrivacyShellMode)
+                        ? scene.PrivacyShellMode
+                        : PrivacyDesktopShellMode.FullExplorer
                 })
                 .ToList();
 
@@ -64,7 +67,7 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
 
             return settings with
             {
-                SchemaVersion = 6,
+                SchemaVersion = 7,
                 Hotkey = scenes.First(scene => scene.Id == activeSceneId).Hotkey,
                 Targets = [.. scenes.First(scene => scene.Id == activeSceneId).Targets],
                 Scenes = scenes,

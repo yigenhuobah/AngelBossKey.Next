@@ -1,4 +1,5 @@
 using AngelBossKey.Next.Core.Abstractions;
+using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Core.Services;
 using System.Runtime.InteropServices;
 
@@ -17,6 +18,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
     private readonly ManualResetEventSlim _threadStarted = new();
     private readonly CancellationTokenSource _shutdown = new();
     private uint _desktopThreadId;
+    private int _activeShellMode = -1;
     private bool _isActive;
     private bool _disposed;
 
@@ -37,8 +39,11 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
     public event EventHandler? StateChanged;
 
     public async Task<(bool Success, string Message)> EnterAsync(
+        PrivacyDesktopShellMode shellMode,
         CancellationToken cancellationToken = default)
     {
+        var requestedShellMode = shellMode;
+        var shellMessage = string.Empty;
         if (IsActive)
         {
             return (true, "已位于独立隐私桌面。使用 Ctrl+Alt+Shift+F12 紧急返回。");
@@ -54,10 +59,10 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         try
         {
             context = await _desktopReady.Task.WaitAsync(cancellationToken);
-            var shell = await Task.Run(
-                () => context.Shell.EnsureReady(cancellationToken),
-                cancellationToken);
-            if (!shell.Success) return shell;
+            var shell = await PrepareShellAsync(context, shellMode, cancellationToken);
+            if (!shell.Success) return (false, shell.Message);
+            shellMode = shell.Mode;
+            shellMessage = shell.Message;
         }
         catch (Exception exception)
         {
@@ -75,16 +80,22 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         }
 
         Volatile.Write(ref _isActive, true);
-        if (!context.Shell.IsReady)
+        Volatile.Write(ref _activeShellMode, (int)shellMode);
+        if (!context.IsReady(shellMode))
         {
             if (_originalDesktop != 0) NativeMethods.SwitchDesktop(_originalDesktop);
             Volatile.Write(ref _isActive, false);
+            Volatile.Write(ref _activeShellMode, -1);
             _log.Warning("desktop.switch", "shell-exited-before-confirmation=true");
             return (false, "隐私桌面 Shell 在切换时已退出，已自动返回原桌面。");
         }
         StateChanged?.Invoke(this, EventArgs.Empty);
         _log.Info("desktop.enter", "success=true");
-        return (true, "已进入独立隐私桌面。按 Ctrl+Alt+Shift+F12 紧急返回。");
+        var modeText = shellMode == PrivacyDesktopShellMode.FullExplorer
+            ? "完整 Explorer 桌面"
+            : "兼容轻量桌面";
+        var fallbackText = requestedShellMode != shellMode ? $"{shellMessage} " : string.Empty;
+        return (true, $"已进入{modeText}。{fallbackText}按 Ctrl+Alt+Shift+F12 紧急返回。");
     }
 
     public Task<(bool Success, string Message)> ReturnAsync(
@@ -179,20 +190,30 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             return;
         }
 
-        var shell = new DesktopShellHost(
+        var compatibleShell = new DesktopShellHost(
             desktop,
             $"AngelBossKey.Next.{Environment.ProcessId}",
             _desktopThreadId,
             _log);
-        shell.Exited += (_, _) =>
+        var explorerShell = new ExplorerDesktopShellHost(
+            desktop,
+            $"AngelBossKey.Next.{Environment.ProcessId}",
+            _log);
+        compatibleShell.Exited += (_, _) =>
             NativeMethods.PostThreadMessageW(
                 _desktopThreadId,
                 PrivacyDesktopShellBridge.ShellExitedMessage,
-                0,
+                (nuint)PrivacyDesktopShellMode.Compatibility + 1,
+                0);
+        explorerShell.Exited += (_, _) =>
+            NativeMethods.PostThreadMessageW(
+                _desktopThreadId,
+                PrivacyDesktopShellBridge.ShellExitedMessage,
+                (nuint)PrivacyDesktopShellMode.FullExplorer + 1,
                 0);
         try
         {
-            _desktopReady.TrySetResult(new DesktopContext(desktop, shell));
+            _desktopReady.TrySetResult(new DesktopContext(desktop, compatibleShell, explorerShell));
             var message = new NativeMethods.Message();
             while (!_shutdown.IsCancellationRequested &&
                 NativeMethods.GetMessageW(ref message, 0, 0, 0) > 0)
@@ -221,13 +242,15 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
                             : PrivacyDesktopShellBridge.ReturnFailedMessage,
                         0,
                         0);
-                    if (returned && !acknowledged) shell.Reset();
+                    if (returned && !acknowledged) compatibleShell.Reset();
                     continue;
                 }
 
                 if (message.Id == PrivacyDesktopShellBridge.ShellExitedMessage)
                 {
-                    if (_originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
+                    var exitedMode = (int)message.WParam - 1;
+                    if (IsActive && exitedMode == Volatile.Read(ref _activeShellMode) &&
+                        _originalDesktop != 0 && NativeMethods.SwitchDesktop(_originalDesktop))
                     {
                         MarkReturned("desktop.shell-exited");
                     }
@@ -243,18 +266,73 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             if (_originalDesktop != 0) NativeMethods.SwitchDesktop(_originalDesktop);
             MarkReturned("desktop.thread-stop");
             NativeMethods.UnregisterHotKey(0, EmergencyHotkeyId);
-            shell.Dispose();
+            explorerShell.Dispose();
+            compatibleShell.Dispose();
             NativeMethods.SetThreadDesktop(threadOriginalDesktop);
             NativeMethods.CloseDesktop(desktop);
         }
     }
 
-    private sealed record DesktopContext(nint Desktop, DesktopShellHost Shell);
+    private async Task<ShellPreparationResult> PrepareShellAsync(
+        DesktopContext context,
+        PrivacyDesktopShellMode requestedMode,
+        CancellationToken cancellationToken)
+    {
+        if (requestedMode == PrivacyDesktopShellMode.Compatibility)
+        {
+            context.ExplorerShell.Stop();
+            var compatible = await Task.Run(
+                () => context.CompatibleShell.EnsureReady(cancellationToken),
+                cancellationToken);
+            return new ShellPreparationResult(
+                compatible.Success,
+                PrivacyDesktopShellMode.Compatibility,
+                compatible.Message);
+        }
+
+        context.CompatibleShell.Stop();
+        var explorer = await Task.Run(
+            () => context.ExplorerShell.EnsureReady(cancellationToken),
+            cancellationToken);
+        if (explorer.Success)
+        {
+            return new ShellPreparationResult(true, PrivacyDesktopShellMode.FullExplorer, explorer.Message);
+        }
+
+        var fallback = await Task.Run(
+            () => context.CompatibleShell.EnsureReady(cancellationToken),
+            cancellationToken);
+        var message = fallback.Success
+            ? $"{explorer.Message} 已自动回退到兼容轻量桌面。"
+            : $"{explorer.Message} 兼容轻量桌面也未能启动：{fallback.Message}";
+        _log.Warning("desktop.shell.fallback", $"success={fallback.Success}");
+        return new ShellPreparationResult(
+            fallback.Success,
+            PrivacyDesktopShellMode.Compatibility,
+            message);
+    }
+
+    private sealed record DesktopContext(
+        nint Desktop,
+        DesktopShellHost CompatibleShell,
+        ExplorerDesktopShellHost ExplorerShell)
+    {
+        internal bool IsReady(PrivacyDesktopShellMode mode) =>
+            mode == PrivacyDesktopShellMode.FullExplorer
+                ? ExplorerShell.IsReady
+                : CompatibleShell.IsReady;
+    }
+
+    private sealed record ShellPreparationResult(
+        bool Success,
+        PrivacyDesktopShellMode Mode,
+        string Message);
 
     private void MarkReturned(string eventName)
     {
         var wasActive = Volatile.Read(ref _isActive);
         Volatile.Write(ref _isActive, false);
+        Volatile.Write(ref _activeShellMode, -1);
         if (!wasActive) return;
         if (!_disposed) StateChanged?.Invoke(this, EventArgs.Empty);
         _log.Info(eventName, "success=true");

@@ -84,7 +84,7 @@ public sealed class MainWindowViewModel : ObservableObject
         LoadSelectedTargets();
         _settings = settings with
         {
-            SchemaVersion = 6,
+            SchemaVersion = 7,
             Scenes = Scenes.Select(scene => scene.ToModel()).ToList(),
             ActiveSceneId = _selectedScene.Id
         };
@@ -112,6 +112,11 @@ public sealed class MainWindowViewModel : ObservableObject
         new(MouseAutomationTrigger.MiddleButton, "中键"),
         new(MouseAutomationTrigger.WheelUp, "滚轮向上"),
         new(MouseAutomationTrigger.WheelDown, "滚轮向下")
+    ];
+    public IReadOnlyList<PrivacyDesktopShellOption> PrivacyDesktopShellOptions { get; } =
+    [
+        new(PrivacyDesktopShellMode.FullExplorer, "完整桌面（Explorer）"),
+        new(PrivacyDesktopShellMode.Compatibility, "兼容桌面（轻量）")
     ];
     public ICommand RemoveTargetCommand { get; }
     public ICommand MoveTargetUpCommand { get; }
@@ -409,7 +414,7 @@ public sealed class MainWindowViewModel : ObservableObject
             _operationSceneId = SelectedScene.Id;
             if (SelectedScene.Mode == SceneMode.PrivacyDesktop)
             {
-                var desktopResult = await _privacyDesktop.EnterAsync();
+                var desktopResult = await _privacyDesktop.EnterAsync(SelectedScene.PrivacyShellMode);
                 if (desktopResult.Success)
                 {
                     Message = desktopResult.Message;
@@ -738,7 +743,7 @@ public sealed class MainWindowViewModel : ObservableObject
         var active = SelectedScene.ToModel();
         _settings = _settings with
         {
-            SchemaVersion = 6,
+            SchemaVersion = 7,
             Scenes = Scenes.Select(scene => scene.ToModel()).ToList(),
             ActiveSceneId = SelectedScene.Id,
             Hotkey = active.Hotkey,
@@ -877,10 +882,14 @@ public sealed class MainWindowViewModel : ObservableObject
     {
         public bool IsActive => false;
         public event EventHandler? StateChanged { add { } remove { } }
-        public Task<(bool Success, string Message)> EnterAsync(CancellationToken cancellationToken = default) => Task.FromResult((false, "独立桌面服务不可用。"));
+        public Task<(bool Success, string Message)> EnterAsync(
+            PrivacyDesktopShellMode shellMode,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult((false, "独立桌面服务不可用。"));
         public Task<(bool Success, string Message)> ReturnAsync(CancellationToken cancellationToken = default) => Task.FromResult((true, "当前已在原桌面。"));
         public void Dispose() { }
     }
 }
 
 public sealed record MouseTriggerOption(MouseAutomationTrigger Value, string Label);
+public sealed record PrivacyDesktopShellOption(PrivacyDesktopShellMode Value, string Label);

@@ -8,6 +8,7 @@ public sealed class SceneRowViewModel : ObservableObject
     private string _name;
     private HotkeyGesture _hotkey;
     private SceneMode _mode;
+    private PrivacyDesktopShellMode _privacyShellMode;
     private int _idleMinutes;
     private MouseAutomationTrigger _mouseTrigger;
     private bool _enableLowLevelMouseHook;
@@ -20,6 +21,7 @@ public sealed class SceneRowViewModel : ObservableObject
         _name = scene.Name;
         _hotkey = scene.Hotkey;
         _mode = scene.Mode;
+        _privacyShellMode = scene.PrivacyShellMode;
         _targets = [.. scene.Targets];
         _idleMinutes = scene.Automation.IdleMinutes;
         _mouseTrigger = scene.Automation.MouseTrigger;
@@ -42,6 +44,11 @@ public sealed class SceneRowViewModel : ObservableObject
     }
     public string HotkeyText => HotkeyFormatter.Format(Hotkey);
     public SceneMode Mode { get => _mode; set => SetProperty(ref _mode, value); }
+    public PrivacyDesktopShellMode PrivacyShellMode
+    {
+        get => _privacyShellMode;
+        set => SetProperty(ref _privacyShellMode, value);
+    }
     public bool IsPrivacyDesktop
     {
         get => Mode == SceneMode.PrivacyDesktop;
@@ -78,6 +85,7 @@ public sealed class SceneRowViewModel : ObservableObject
         Name = string.IsNullOrWhiteSpace(Name) ? "未命名场景" : Name.Trim(),
         Hotkey = Hotkey,
         Mode = Mode,
+        PrivacyShellMode = PrivacyShellMode,
         Targets = [.. _targets],
         Automation = ToAutomation()
     };
