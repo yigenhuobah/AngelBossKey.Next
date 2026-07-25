@@ -129,6 +129,30 @@ public sealed class ViewModelBehaviorTests
     }
 
     [Fact]
+    public void DiagnosticLog_RedactsExceptionMessages()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "AngelBossKey.Next.Tests", Guid.NewGuid().ToString("N"));
+        const string sensitiveMessage = "Quarterly results - C:\\Private\\editor.exe --private-token";
+        try
+        {
+            var log = new RollingDiagnosticLog(directory);
+
+            log.LogError("test.error", new InvalidOperationException(sensitiveMessage));
+
+            var contents = File.ReadAllText(Path.Combine(directory, "angelbosskey.log"));
+            Assert.Contains("exception=InvalidOperationException", contents);
+            Assert.DoesNotContain(sensitiveMessage, contents);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task WindowStateMonitor_ContinuesAfterATransientFailure()
     {
         var controller = new FakeVisibilityController { FailFirstSelfCheck = true };
@@ -346,6 +370,41 @@ public sealed class ViewModelBehaviorTests
 
         Assert.Equal(1, controller.HideCalls);
         Assert.Equal(1, audio.MuteCalls);
+    }
+
+    [Fact]
+    public async Task RestoreAll_RestoresHiddenWindowsAndAudioSessions()
+    {
+        var controller = new FakeVisibilityController { IsHidden = true };
+        var audio = new FakeAudioController();
+        var viewModel = new MainWindowViewModel(
+            CreateSettingsWithTargets("Editor"),
+            new MemorySettingsStore(),
+            controller,
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio);
+
+        await viewModel.RestoreAllAsync();
+
+        Assert.Equal(1, controller.RestoreCalls);
+        Assert.Equal(1, audio.RestoreCalls);
+    }
+
+    [Fact]
+    public async Task SelfCheck_ReportsCorrectionsWithoutChangingSceneConfiguration()
+    {
+        var controller = new FakeVisibilityController
+        {
+            SelfCheckResult = new VisibilityOperationResult { ChangedCount = 2 }
+        };
+        var viewModel = CreateViewModel(new MemorySettingsStore(), controller, CreateSettingsWithTargets("Editor"));
+
+        await viewModel.RunSelfCheckAsync();
+
+        Assert.Equal(1, controller.SelfCheckCalls);
+        Assert.Contains("已修正 2 项状态", viewModel.Message);
+        Assert.Single(viewModel.Targets);
     }
 
     [Fact]
@@ -654,6 +713,7 @@ public sealed class ViewModelBehaviorTests
         public bool FailFirstSelfCheck { get; init; }
         public bool RestoreLeavesHidden { get; init; }
         public bool FailBlockedFirstRestore { get; init; }
+        public VisibilityOperationResult SelfCheckResult { get; init; } = new();
         public int SelfCheckCalls { get; private set; }
         public TaskCompletionSource FirstRestoreStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -715,7 +775,7 @@ public sealed class ViewModelBehaviorTests
                 SecondSelfCheckReached.TrySetResult();
             }
 
-            return Task.FromResult(new VisibilityOperationResult());
+            return Task.FromResult(SelfCheckResult);
         }
 
         public Task<bool> TryHideNewWindowAsync(long handle, CancellationToken cancellationToken = default) =>

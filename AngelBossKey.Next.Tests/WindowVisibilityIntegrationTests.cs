@@ -95,7 +95,7 @@ public sealed class WindowVisibilityIntegrationTests
     public async Task Controller_HidesAndRestoresAResponsiveTopLevelWindow()
     {
         using var testWindow = await TestWindowHost.StartAsync();
-        var process = Process.GetCurrentProcess();
+        using var process = Process.GetCurrentProcess();
         var window = new WindowInfo
         {
             Handle = testWindow.Handle,
@@ -264,21 +264,7 @@ public sealed class WindowVisibilityIntegrationTests
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         var brokerTask = ElevatedWindowBrokerServer.RunAsync(pipeName, token);
         await server.WaitForConnectionAsync().WaitAsync(TimeSpan.FromSeconds(3));
-        var record = new HiddenWindowRecord
-        {
-            Handle = testWindow.Handle,
-            ProcessId = process.Id,
-            ProcessStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
-            ExecutablePath = Environment.ProcessPath!,
-            Placement = new WindowPlacementSnapshot
-            {
-                ShowCommand = NativeMethods.SwShowNormal,
-                Left = 80,
-                Top = 80,
-                Right = 560,
-                Bottom = 400
-            }
-        };
+        var record = CreateBrokerRecord(testWindow, process);
 
         await ElevatedWindowBrokerProtocol.WriteAsync(
             server,
@@ -303,25 +289,70 @@ public sealed class WindowVisibilityIntegrationTests
     }
 
     [Fact]
+    public async Task BrokerProtocol_RejectsRequestWithAnInvalidToken()
+    {
+        using var testWindow = await TestWindowHost.StartAsync("Broker invalid token");
+        using var process = Process.GetCurrentProcess();
+        var pipeName = $"AngelBossKey.Next.Tests.{Guid.NewGuid():N}";
+        const string expectedToken = "expected-token";
+        await using var server = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        var brokerTask = ElevatedWindowBrokerServer.RunAsync(
+            pipeName,
+            expectedToken,
+            TestContext.Current.CancellationToken);
+        await server.WaitForConnectionAsync(TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await ElevatedWindowBrokerProtocol.WriteAsync(
+            server,
+            new ElevatedWindowBrokerClient.BrokerEnvelope
+            {
+                Token = "invalid-token-",
+                Request = new ElevatedWindowRequest
+                {
+                    Command = ElevatedWindowCommand.Query,
+                    Windows = [CreateBrokerRecord(testWindow, process)]
+                }
+            },
+            TestContext.Current.CancellationToken);
+
+        var response = await ElevatedWindowBrokerProtocol.ReadAsync<ElevatedWindowResponse>(
+            server,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(response);
+        Assert.Equal(0, response.ChangedCount);
+        Assert.Equal(1, response.FailedCount);
+        Assert.Equal(2, await brokerTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task BrokerProtocol_RejectsLegacyHandleOnlyRequest()
+    {
+        using var testWindow = await TestWindowHost.StartAsync("Broker legacy handle");
+        using var process = Process.GetCurrentProcess();
+        var result = await ExecuteBrokerRequestWithExitCodeAsync(new ElevatedWindowRequest
+        {
+            Command = ElevatedWindowCommand.Query,
+            Handles = [123],
+            Windows = [CreateBrokerRecord(testWindow, process)]
+        });
+
+        Assert.Equal(0, result.Response.ChangedCount);
+        Assert.Equal(1, result.Response.FailedCount);
+        Assert.Equal(2, result.ExitCode);
+    }
+
+    [Fact]
     public async Task Broker_HidesAndRestoresResponsiveWindowAfterAsyncConfirmation()
     {
         using var testWindow = await TestWindowHost.StartAsync("Broker visibility");
-        var process = Process.GetCurrentProcess();
-        var record = new HiddenWindowRecord
-        {
-            Handle = testWindow.Handle,
-            ProcessId = process.Id,
-            ProcessStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
-            ExecutablePath = Environment.ProcessPath!,
-            Placement = new WindowPlacementSnapshot
-            {
-                ShowCommand = NativeMethods.SwShowNormal,
-                Left = 80,
-                Top = 80,
-                Right = 560,
-                Bottom = 400
-            }
-        };
+        using var process = Process.GetCurrentProcess();
+        var record = CreateBrokerRecord(testWindow, process);
 
         var hidden = await ExecuteBrokerRequestAsync(new ElevatedWindowRequest
         {
@@ -344,6 +375,14 @@ public sealed class WindowVisibilityIntegrationTests
 
     private static async Task<ElevatedWindowResponse> ExecuteBrokerRequestAsync(ElevatedWindowRequest request)
     {
+        var result = await ExecuteBrokerRequestWithExitCodeAsync(request);
+        Assert.Equal(0, result.ExitCode);
+        return result.Response;
+    }
+
+    private static async Task<(ElevatedWindowResponse Response, int ExitCode)> ExecuteBrokerRequestWithExitCodeAsync(
+        ElevatedWindowRequest request)
+    {
         var pipeName = $"AngelBossKey.Next.Tests.{Guid.NewGuid():N}";
         var token = Convert.ToHexString(Guid.NewGuid().ToByteArray());
         await using var server = new NamedPipeServerStream(
@@ -361,9 +400,25 @@ public sealed class WindowVisibilityIntegrationTests
         var response = await ElevatedWindowBrokerProtocol.ReadAsync<ElevatedWindowResponse>(
             server,
             CancellationToken.None);
-        Assert.Equal(0, await brokerTask.WaitAsync(TimeSpan.FromSeconds(3)));
-        return Assert.IsType<ElevatedWindowResponse>(response);
+        var exitCode = await brokerTask.WaitAsync(TimeSpan.FromSeconds(3));
+        return (Assert.IsType<ElevatedWindowResponse>(response), exitCode);
     }
+
+    private static HiddenWindowRecord CreateBrokerRecord(TestWindowHost testWindow, Process process) => new()
+    {
+        Handle = testWindow.Handle,
+        ProcessId = process.Id,
+        ProcessStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+        ExecutablePath = Environment.ProcessPath!,
+        Placement = new WindowPlacementSnapshot
+        {
+            ShowCommand = NativeMethods.SwShowNormal,
+            Left = 80,
+            Top = 80,
+            Right = 560,
+            Bottom = 400
+        }
+    };
 
     private static WindowInfo CreateWindow(TestWindowHost host, Process process, string title) => new()
     {

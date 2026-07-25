@@ -305,14 +305,22 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{Binding Message}" Margin="24,0" VerticalAlignment="Center"
                        Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" />
-            <Button Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE838;"
+            <Button Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE9CE;"
+                    ToolTip="运行窗口状态自检" AutomationProperties.Name="运行窗口状态自检"
+                    Command="{Binding RunSelfCheckCommand}" Margin="0,0,8,0" />
+            <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE8B7;"
+                    ToolTip="复制脱敏诊断信息" AutomationProperties.Name="复制脱敏诊断信息"
+                    Click="CopyDiagnostics_Click" Margin="0,0,8,0" />
+            <Button Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE838;"
                     ToolTip="打开诊断日志目录" AutomationProperties.Name="打开诊断日志目录"
                     Click="OpenLogs_Click" Margin="0,0,16,0" />
-            <CheckBox Grid.Column="2" Content="开机启动" IsChecked="{Binding LaunchAtLogin}" Margin="16,0,24,0" />
-            <CheckBox Grid.Column="3" Content="关闭到托盘" IsChecked="{Binding CloseToTray}" Margin="0,0,24,0" />
+            <CheckBox Grid.Column="4" Content="开机启动" IsChecked="{Binding LaunchAtLogin}" Margin="16,0,24,0" />
+            <CheckBox Grid.Column="5" Content="关闭到托盘" IsChecked="{Binding CloseToTray}" Margin="0,0,24,0" />
         </Grid>
     </Grid>
 </Window>

@@ -46,6 +46,29 @@ public sealed class CoreBehaviorTests : IDisposable
     }
 
     [Fact]
+    public void DiagnosticReport_ExcludesSensitiveWindowData()
+    {
+        var report = DiagnosticReportFormatter.Format(new DiagnosticReportSnapshot
+        {
+            AppVersion = "0.8.0\r\ninjected",
+            OperatingSystem = "Windows test",
+            ProcessArchitecture = "X64",
+            SceneCount = 2,
+            TargetRuleCount = 3,
+            EnabledTargetRuleCount = 2,
+            WindowsHidden = true,
+            PendingAudioRestores = 1
+        });
+
+        Assert.Contains("TargetRules: total=3; enabled=2", report);
+        Assert.Contains("Privacy: excludes window titles", report);
+        Assert.DoesNotContain("0.8.0\r\ninjected", report);
+        Assert.DoesNotContain("Quarterly results - confidential", report);
+        Assert.DoesNotContain(@"C:\Private\editor.exe", report);
+        Assert.DoesNotContain("--private-token", report);
+    }
+
+    [Fact]
     public void RuleMatcher_AppliesOptionalTitleIncludeAndExcludeConditions()
     {
         var window = CreateWindowInfo(@"C:\Apps\Editor\editor.exe") with

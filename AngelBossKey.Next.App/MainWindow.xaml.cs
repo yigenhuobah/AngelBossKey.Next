@@ -178,6 +178,24 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{directory}\"") { UseShellExecute = true });
     }
 
+    private void CopyDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(_viewModel.BuildDiagnosticReport());
+            _viewModel.ReportDiagnosticCopied();
+        }
+        catch (Exception exception)
+        {
+            WpfMessageBox.Show(
+                this,
+                exception.Message,
+                "复制诊断信息失败",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
     private static string SanitizeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();

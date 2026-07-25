@@ -94,6 +94,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         MoveTargetUpCommand = new RelayCommand(parameter => MoveTarget(parameter, -1));
         MoveTargetDownCommand = new RelayCommand(parameter => MoveTarget(parameter, 1));
         ToggleVisibilityCommand = new RelayCommand(_ => _ = ToggleVisibilityAsync(), _ => CanToggle);
+        RunSelfCheckCommand = new AsyncRelayCommand(_ => RunSelfCheckAsync(), _ => !_isBusy);
         AddSceneCommand = new AsyncRelayCommand(_ => AddSceneAsync(), onException: ReportSceneCommandException);
         RemoveSceneCommand = new AsyncRelayCommand(
             _ => RemoveSelectedSceneAsync(),
@@ -127,6 +128,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public ICommand AddSceneCommand { get; }
     public AsyncRelayCommand RemoveSceneCommand { get; }
     public RelayCommand ToggleVisibilityCommand { get; }
+    public AsyncRelayCommand RunSelfCheckCommand { get; }
 
     public SceneRowViewModel SelectedScene => _selectedScene;
 
@@ -748,6 +750,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(TargetCountText));
         RefreshExtendedState();
         ToggleVisibilityCommand.RaiseCanExecuteChanged();
+        RunSelfCheckCommand.RaiseCanExecuteChanged();
     }
 
     private static string BuildOperationMessage(VisibilityOperationResult result, bool restoring)
