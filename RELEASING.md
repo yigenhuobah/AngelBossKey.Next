@@ -6,44 +6,52 @@ artifact.
 
 ## Prepare
 
-1. Update the application version in `AngelBossKey.Next.App.csproj` and the
-   portable output folder in `Properties\PublishProfiles\Portable.pubxml`.
-2. Run the complete gate and review the results:
-
-   ```powershell
-   .\eng\quality.ps1 -Coverage
-   .\eng\assert-no-vulnerable-packages.ps1
-   Get-ChildItem -Recurse -Filter *.csproj | ForEach-Object {
-     dotnet package list --project $_.FullName --deprecated --include-transitive
-   }
-   ```
+1. Update the single `Version` value in `Directory.Build.props`. The
+   application metadata and portable output folder derive from it.
+2. Use the candidate-preparation step below without bypassing it. It runs the
+   complete quality gate with coverage, rejects known vulnerable packages, and
+   writes a deprecated-package report for review.
 
 3. Verify that no credentials, recovery journals, logs, `bin`, `obj`, or
    `dist` files are staged for source control.
 4. Confirm that `LICENSE` contains the MIT License and that the copyright year
    and holder remain accurate for the release.
 
-## Build and sign
+## Prepare an unsigned candidate
 
 ```powershell
-dotnet publish .\AngelBossKey.Next.App\AngelBossKey.Next.App.csproj -p:PublishProfile=Portable
+.\eng\prepare-release.ps1 -Version 0.9.0
 ```
 
-Use the organization-approved code-signing certificate and timestamp service to
-sign every shipped `.exe` and `.dll`. Verify each signature with
-`Get-AuthenticodeSignature`; no item should report a status other than `Valid`.
+The script creates an unsigned portable zip, an unsigned-candidate SHA-256
+file, a deprecated-package report, and a release-notes draft. The candidate
+checksum is only for the unsigned artifact and must never be published as the
+official checksum.
 
-## Package and verify
+The same preparation can be started manually from GitHub Actions. It validates
+the requested version against `Directory.Build.props`, then uploads the same
+unsigned material as a 14-day Artifact. It does not create a tag or a release.
 
-Create a zip from the signed publish directory and generate a SHA-256 checksum:
+## Sign, package, and verify
+
+1. Download and extract the unsigned candidate, then sign every shipped `.exe`
+   and `.dll` with the organization-approved certificate and timestamp service.
+2. Verify every signature with `Get-AuthenticodeSignature`; no item should
+   report a status other than `Valid`.
+3. Create a new zip from the signed portable directory, then write its
+   SHA-256 checksum next to it:
 
 ```powershell
-Get-FileHash .\dist\AngelBossKey.Next-<version>-win-x64.zip -Algorithm SHA256
+$archive = '.\dist\AngelBossKey.Next-<version>-win-x64.zip'
+$hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+"$hash *$([System.IO.Path]::GetFileName($archive))" |
+  Set-Content "$archive.sha256" -Encoding ascii
 ```
 
-Publish the checksum next to the release asset. Confirm the published archive
-extracts, starts without elevation, registers no service, and stores settings
-only under `%LocalAppData%\AngelBossKey.Next`.
+4. Run `docs\release-validation.md` on an isolated VM or dedicated test
+   machine. Confirm the signed archive extracts, starts without elevation,
+   registers no service, and stores settings only under
+   `%LocalAppData%\AngelBossKey.Next`.
 
 ## Publish notes
 
