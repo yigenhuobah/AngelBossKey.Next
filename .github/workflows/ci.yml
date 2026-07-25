@@ -44,7 +44,6 @@ jobs:
         run: >
           dotnet publish .\AngelBossKey.Next.App\AngelBossKey.Next.App.csproj
           --configuration Release
-          --no-restore
           -p:PublishProfile=Portable
           -p:PublishDir=${{ github.workspace }}\artifacts\portable\
 
