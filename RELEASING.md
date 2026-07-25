@@ -12,7 +12,10 @@ artifact.
 
    ```powershell
    .\eng\quality.ps1 -Coverage
-   dotnet list .\AngelBossKey.Next.slnx package --deprecated --include-transitive
+   .\eng\assert-no-vulnerable-packages.ps1
+   Get-ChildItem -Recurse -Filter *.csproj | ForEach-Object {
+     dotnet package list --project $_.FullName --deprecated --include-transitive
+   }
    ```
 
 3. Verify that no credentials, recovery journals, logs, `bin`, `obj`, or
