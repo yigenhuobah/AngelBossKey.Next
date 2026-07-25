@@ -34,3 +34,8 @@ Describe the user-visible behavior, affected security boundary, tests run, and
 any manual validation. Broker changes must cover authorization failure and
 invalid-request handling. Changes to release files must preserve deterministic
 build settings and the portable publish profile.
+
+## License of contributions
+
+By submitting a contribution, you agree to license it under this repository's
+MIT License.

@@ -17,9 +17,8 @@ artifact.
 
 3. Verify that no credentials, recovery journals, logs, `bin`, `obj`, or
    `dist` files are staged for source control.
-4. Before publishing the source repository, choose and add a `LICENSE`. The
-   license is a maintainer and legal decision, so this repository does not
-   invent one automatically.
+4. Confirm that `LICENSE` contains the MIT License and that the copyright year
+   and holder remain accurate for the release.
 
 ## Build and sign
 

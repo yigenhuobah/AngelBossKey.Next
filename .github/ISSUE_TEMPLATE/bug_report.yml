@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem without exposing private window content.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include window titles, executable paths, launch arguments, recovery files, or raw diagnostic logs. For a suspected security issue, follow SECURITY.md instead of opening a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: The version shown in the application or release name.
+    validations:
+      required: true
+  - type: dropdown
+    id: windows
+    attributes:
+      label: Windows version
+      options:
+        - Windows 10 22H2
+        - Windows 11
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Use generic program names and redact private data.
+      placeholder: |
+        1. Create a scene with a generic test application.
+        2. Trigger the scene.
+        3. Observe the result.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostic report (optional)
+      description: Use the application's copy-diagnostics action; remove anything you do not want to share.
