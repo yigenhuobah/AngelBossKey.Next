@@ -4,13 +4,17 @@
 
 核心功能使用 Windows 正式 API，不注入其他进程、不远程写内存、不联网，也不默认申请管理员权限。程序采用自包含便携发布，无需安装。
 
+> **无签名 Preview 提示：** 公开 Preview 用于兼容性验证，尚不是稳定版，也没有代码签名。请只从[官方 GitHub Releases](https://github.com/yigenhuobah/AngelBossKey.Next/releases)下载；Windows 可能显示 SmartScreen 警告。下载后先核对随附的 SHA-256 校验和，不要使用第三方重打包或转存的文件。
+
 ## 第一次使用
 
-1. 从 Releases 下载最新的 `AngelBossKey.Next-v<版本>-win-x64.zip`，解压后运行 `AngelBossKey.Next.exe`。
-2. 先打开准备隐藏的程序，再回到天使老板键 Next，点击“添加程序”。
-3. 在窗口列表中勾选目标并确认。添加的是该程序的可执行文件规则，不只是当时选中的单个窗口。
-4. 点击右上角的热键按钮，按下“至少一个修饰键 + 一个普通按键”，例如 `Ctrl+Alt+H`，然后保存。
-5. 点击“隐藏目标”进行第一次测试；确认目标消失后，再按刚设置的热键恢复。
+1. 从[官方 GitHub Releases](https://github.com/yigenhuobah/AngelBossKey.Next/releases)下载同一版本的 `AngelBossKey.Next-v<版本>-win-x64.zip` 和 `.sha256` 文件。
+2. 在 PowerShell 中执行 `Get-FileHash .\AngelBossKey.Next-v<版本>-win-x64.zip -Algorithm SHA256`，将输出的十六进制哈希与 `.sha256` 文件中的值逐字比对；不一致时不要运行该文件。
+3. 解压 ZIP 后运行 `AngelBossKey.Next.exe`。
+4. 先打开准备隐藏的程序，再回到天使老板键 Next，点击“添加程序”。
+5. 在窗口列表中勾选目标并确认。添加的是该程序的可执行文件规则，不只是当时选中的单个窗口。
+6. 点击右上角的热键按钮，按下“至少一个修饰键 + 一个普通按键”，例如 `Ctrl+Alt+H`，然后保存。
+7. 点击“隐藏目标”进行第一次测试；确认目标消失后，再按刚设置的热键恢复。
 
 软件没有默认热键。当前场景必须成功注册热键后，隐藏按钮和隐藏功能才会启用。若组合键已被 Windows 或其他软件占用，界面会提示注册失败，并保留原来的有效热键。
 
@@ -178,6 +182,14 @@
 - `logs\angelbosskey.log`：不含窗口标题的滚动诊断日志，最多保留三份备份。
 
 程序不发起网络请求，也不包含遥测。开机启动使用当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，命令包含程序绝对路径和 `--background` 参数。移动程序目录后，下次正常启动会自动修复启动路径。
+
+## Preview 反馈与兼容性
+
+GitHub-hosted runner 只验证构建、单元测试、静态扫描和发布产物；它是一次性的非交互环境，**不构成**托盘、Explorer、DPI、多显示器或独立隐私桌面的 GUI 兼容性认证。欢迎在自己的 Windows 设备上按[发布验收指引](docs/release-validation.md)挑选适合的项目测试，并通过[兼容性报告](https://github.com/yigenhuobah/AngelBossKey.Next/issues/new?template=compatibility_report.yml)反馈结果。
+
+报告请填写应用版本、Windows 精确版本和构建号、DPI、显示器数量、测试功能与结果。只可粘贴应用“复制诊断报告”生成的内容，并在提交前再次确认其中不含窗口标题、可执行文件路径、启动参数、恢复文件、原始日志、令牌或其他个人内容；不要上传暴露用户内容的截图。安全问题请遵循 [SECURITY.md](SECURITY.md)，不要创建公开 Issue。
+
+日常使用问题请到 Discussions 的 [Q&A（使用问答）](https://github.com/yigenhuobah/AngelBossKey.Next/discussions/categories/q-a)；分享场景配置或使用方式请到 [Show and tell（场景分享）](https://github.com/yigenhuobah/AngelBossKey.Next/discussions/categories/show-and-tell)；维护者公告会发布在 [Announcements（公告）](https://github.com/yigenhuobah/AngelBossKey.Next/discussions/categories/announcements)。这些入口同样不要包含窗口标题、路径、参数、恢复文件或含用户内容的截图。
 
 ## 功能概览
 

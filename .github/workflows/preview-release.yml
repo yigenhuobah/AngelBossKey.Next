@@ -1,0 +1,212 @@
+name: Publish unsigned Preview
+
+on:
+  push:
+    tags:
+      - 'v*-preview.*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to validate without publishing
+        required: true
+        default: main
+        type: string
+      version:
+        description: Preview version from Directory.Build.props, for example 0.9.0-preview.1
+        required: true
+        default: 0.9.0-preview.1
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Build unsigned Preview
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: windows-latest
+    timeout-minutes: 35
+    outputs:
+      tag: ${{ steps.verify.outputs.tag }}
+      version: ${{ steps.verify.outputs.version }}
+      artifact-name: ${{ steps.verify.outputs.artifact-name }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Verify Preview version and main ancestry
+        id: verify
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          if ($env:EVENT_NAME -eq 'push') {
+            $tag = $env:REF_NAME
+          }
+          else {
+            $tag = "v$($env:REQUESTED_VERSION)"
+          }
+
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+-preview\.\d+)$') {
+            throw "Preview tag '$tag' must match v<major>.<minor>.<patch>-preview.<number>."
+          }
+          $version = $Matches.version
+
+          [xml]$versionProps = Get-Content -LiteralPath 'Directory.Build.props'
+          $sourceVersion = $versionProps.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          if ($version -ne $sourceVersion) {
+            throw "Preview tag version '$version' does not match Directory.Build.props version '$sourceVersion'."
+          }
+
+          & git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to fetch origin/main for release ancestry validation.'
+          }
+
+          $commit = ([string](& git rev-parse HEAD)).Trim()
+          if ($env:EVENT_NAME -eq 'push') {
+            $tagCommit = ([string](& git rev-parse "$tag^{commit}")).Trim()
+            if ($tagCommit -ne $commit) {
+              throw "Checked out commit '$commit' does not match tag '$tag' commit '$tagCommit'."
+            }
+          }
+
+          & git merge-base --is-ancestor $commit origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release commit '$commit' is not contained in origin/main."
+          }
+
+          $artifactName = "AngelBossKey.Next-v$version-preview-preparation"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "artifact-name=$artifactName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build unsigned Preview package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          .\eng\prepare-release.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Channel Preview `
+            -OutputDirectory "$env:GITHUB_WORKSPACE\artifacts\preview-release"
+
+      - name: Upload Preview preparation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.verify.outputs.artifact-name }}
+          path: artifacts/preview-release
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub prerelease
+    if: github.event_name == 'push' && github.event.deleted == false
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Preview preparation
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ needs.prepare.outputs.artifact-name }}
+          path: artifacts/preview-release
+
+      - name: Create, upload, and publish prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE 'artifacts\preview-release'
+          $archive = Join-Path $releaseDirectory "AngelBossKey.Next-v$($env:RELEASE_VERSION)-win-x64.zip"
+          $checksum = "$archive.sha256"
+          $deprecationReport = Join-Path $releaseDirectory 'deprecated-packages.txt'
+          $notes = Join-Path $releaseDirectory 'release-notes.md'
+          foreach ($requiredFile in @($archive, $checksum, $deprecationReport, $notes)) {
+            if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+              throw "Expected Preview artifact was not found: $requiredFile"
+            }
+          }
+
+          $releaseJson = & gh api --paginate --slurp `
+            "repos/$($env:GITHUB_REPOSITORY)/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not enumerate existing releases.'
+          }
+          $releasePages = $releaseJson | ConvertFrom-Json
+          $existingReleases = @(
+            $releasePages |
+              ForEach-Object { $_ } |
+              Where-Object { $_.tag_name -eq $env:RELEASE_TAG }
+          )
+          if ($existingReleases.Count -gt 1) {
+            throw "More than one release exists for $($env:RELEASE_TAG)."
+          }
+
+          $releaseTitle = "AngelBossKey Next v$($env:RELEASE_VERSION) (Unsigned Preview)"
+          $existingRelease = $existingReleases | Select-Object -First 1
+          if ($null -ne $existingRelease) {
+            if (-not $existingRelease.draft) {
+              throw "Release $($env:RELEASE_TAG) is already published and cannot be replaced."
+            }
+
+            & gh release edit $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --draft `
+              --prerelease `
+              --title $releaseTitle `
+              --notes-file $notes
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not refresh draft release $($env:RELEASE_TAG)."
+            }
+          }
+          else {
+            & gh release create $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --verify-tag `
+              --draft `
+              --prerelease `
+              --title $releaseTitle `
+              --notes-file $notes
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not create draft release $($env:RELEASE_TAG)."
+            }
+          }
+
+          & gh release upload $env:RELEASE_TAG $archive $checksum $deprecationReport `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not upload assets for draft release $($env:RELEASE_TAG)."
+          }
+
+          & gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false --prerelease
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not publish prerelease $($env:RELEASE_TAG)."
+          }

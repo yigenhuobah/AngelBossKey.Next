@@ -1,0 +1,93 @@
+name: Compatibility report
+description: Report a redacted result from a real Windows desktop environment.
+title: "[Compatibility]: "
+labels:
+  - compatibility
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for Preview compatibility results from a real Windows desktop. Do not include window titles, executable paths, launch arguments, recovery files, raw logs, tokens, or screenshots with user content. Report suspected security issues through SECURITY.md instead of a public issue.
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      description: Copy the version from the release name or the application.
+      placeholder: 0.9.0-preview.1
+    validations:
+      required: true
+  - type: input
+    id: windows_build
+    attributes:
+      label: Windows version and build
+      description: Include the edition, release, and build number.
+      placeholder: Windows 11 24H2, build 26100.863
+    validations:
+      required: true
+  - type: dropdown
+    id: dpi
+    attributes:
+      label: Display scaling (DPI)
+      options:
+        - 100%
+        - 125%
+        - 150%
+        - 175%
+        - 200%
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: monitor_count
+    attributes:
+      label: Number of displays
+      options:
+        - "1"
+        - "2"
+        - 3 or more
+    validations:
+      required: true
+  - type: checkboxes
+    id: tested_features
+    attributes:
+      label: Tested features
+      description: Select every feature included in this result.
+      options:
+        - label: Hide and restore target windows
+        - label: Tray icon and explicit exit
+        - label: Recovery after an unexpected process end
+        - label: Per-application mute
+        - label: On-demand elevation boundary
+        - label: Independent privacy desktop
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Result
+      options:
+        - Pass
+        - Partial or mixed
+        - Fail
+    validations:
+      required: true
+  - type: textarea
+    id: result_details
+    attributes:
+      label: Result details
+      description: Describe the observed behavior with generic application names and no private content.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostic report (optional)
+      description: Paste only the application's copied diagnostic report after reviewing it. Do not upload raw logs or recovery files.
+  - type: checkboxes
+    id: privacy_check
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed window titles, executable paths, launch arguments, recovery data, raw logs, tokens, and user-content screenshots.
+    validations:
+      required: true
