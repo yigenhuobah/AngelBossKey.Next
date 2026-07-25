@@ -143,6 +143,7 @@ public sealed class CoreBehaviorTests : IDisposable
         var scene = Assert.Single(loaded.Scenes);
         Assert.False(loaded.Hotkey.IsConfigured);
         Assert.Equal(PrivacyDesktopShellMode.FullExplorer, scene.PrivacyShellMode);
+        Assert.True(scene.ShowPrivacyToolbar);
     }
 
     [Fact]
@@ -198,6 +199,7 @@ public sealed class CoreBehaviorTests : IDisposable
             Name = "桌面",
             Mode = SceneMode.PrivacyDesktop,
             PrivacyShellMode = PrivacyDesktopShellMode.Compatibility,
+            ShowPrivacyToolbar = false,
             Hotkey = new HotkeyGesture
             {
                 Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift,
@@ -222,6 +224,7 @@ public sealed class CoreBehaviorTests : IDisposable
         Assert.Equal(MouseAutomationTrigger.XButton1, loaded.Scenes[0].Automation.MouseTrigger);
         Assert.Equal(SceneMode.PrivacyDesktop, loaded.Scenes[1].Mode);
         Assert.Equal(PrivacyDesktopShellMode.Compatibility, loaded.Scenes[1].PrivacyShellMode);
+        Assert.False(loaded.Scenes[1].ShowPrivacyToolbar);
     }
 
     [Fact]

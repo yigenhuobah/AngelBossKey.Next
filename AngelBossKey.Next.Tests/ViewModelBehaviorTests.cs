@@ -212,6 +212,33 @@ public sealed class ViewModelBehaviorTests
     }
 
     [Fact]
+    public void PrivacyToolbarPreference_IsPersistedWithTheActiveScene()
+    {
+        var store = new MemorySettingsStore();
+        var viewModel = CreateViewModel(store, new FakeVisibilityController());
+
+        viewModel.SelectedScene.ShowPrivacyToolbar = false;
+
+        Assert.True(SpinWait.SpinUntil(
+            () => store.LastSaved?.Scenes.Single().ShowPrivacyToolbar == false,
+            TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
+    public void PrivacyToolbarOption_IsEditableOnlyForFullExplorerScenes()
+    {
+        var viewModel = CreateViewModel(new MemorySettingsStore(), new FakeVisibilityController());
+
+        Assert.False(viewModel.CanEditPrivacyToolbar);
+
+        viewModel.SelectedScene.IsPrivacyDesktop = true;
+        Assert.True(viewModel.CanEditPrivacyToolbar);
+
+        viewModel.SelectedScene.PrivacyShellMode = PrivacyDesktopShellMode.Compatibility;
+        Assert.False(viewModel.CanEditPrivacyToolbar);
+    }
+
+    [Fact]
     public async Task SwitchingSceneWhileHidden_RestoresBeforeChangingSelection()
     {
         var first = new SceneProfile { Name = "First" };
@@ -366,6 +393,7 @@ public sealed class ViewModelBehaviorTests
             Name = "Privacy",
             Mode = SceneMode.PrivacyDesktop,
             PrivacyShellMode = PrivacyDesktopShellMode.Compatibility,
+            ShowPrivacyToolbar = false,
             Hotkey = new HotkeyGesture { Modifiers = HotkeyModifiers.Control, VirtualKey = 0x31 },
             Targets =
             [
@@ -397,6 +425,7 @@ public sealed class ViewModelBehaviorTests
         Assert.Contains("回退为普通窗口隐藏", result.Detail);
         Assert.Equal(PrivacyDesktopShellMode.Compatibility, privacyDesktop.LastShellMode);
         Assert.Equal(scene.Id, privacyDesktop.LastRequest?.SceneId);
+        Assert.False(privacyDesktop.LastRequest!.ShowToolbar);
         Assert.Single(privacyDesktop.LastRequest!.LaunchItems);
     }
 

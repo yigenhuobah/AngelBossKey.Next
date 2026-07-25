@@ -22,6 +22,8 @@ public sealed partial class MainWindowViewModel
     public int WorkspaceApplicationCount => _workspaceApplicationCount;
     public bool CanEditWorkspaceSettings => !HasWorkspace;
     public bool CanEditWorkspaceMode => SelectedScene.IsPrivacyDesktop && !HasWorkspace;
+    public bool CanEditPrivacyToolbar => CanEditWorkspaceMode &&
+        SelectedScene.PrivacyShellMode == PrivacyDesktopShellMode.FullExplorer;
     public string WorkspaceStatusText => !HasWorkspace
         ? "工作区尚未启动"
         : WorkspaceApplicationCount == 0
@@ -273,6 +275,7 @@ public sealed partial class MainWindowViewModel
         OnPropertyChanged(nameof(WorkspaceApplicationCount));
         OnPropertyChanged(nameof(CanEditWorkspaceSettings));
         OnPropertyChanged(nameof(CanEditWorkspaceMode));
+        OnPropertyChanged(nameof(CanEditPrivacyToolbar));
         OnPropertyChanged(nameof(WorkspaceStatusText));
         OnPropertyChanged(nameof(LaunchItemCountText));
         OnPropertyChanged(nameof(HotkeyOverviewText));

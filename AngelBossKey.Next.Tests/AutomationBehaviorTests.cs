@@ -53,6 +53,49 @@ public sealed class AutomationBehaviorTests
         Assert.False(ExplorerDesktopShellHost.IsExpectedExplorerPath(
             @"C:\Tools\explorer.exe",
             @"C:\Windows\explorer.exe"));
+        Assert.True(ExplorerDesktopShellHost.IsToolbarSatisfied(
+            showToolbar: false,
+            processRunning: false,
+            hasVisibleWindow: false));
+        Assert.True(ExplorerDesktopShellHost.IsToolbarSatisfied(
+            showToolbar: true,
+            processRunning: true,
+            hasVisibleWindow: true));
+        Assert.False(ExplorerDesktopShellHost.IsToolbarSatisfied(
+            showToolbar: true,
+            processRunning: false,
+            hasVisibleWindow: true));
+        Assert.False(ExplorerDesktopShellHost.IsToolbarSatisfied(
+            showToolbar: true,
+            processRunning: true,
+            hasVisibleWindow: false));
+    }
+
+    [Fact]
+    public void ExplorerDesktopToolbar_DisabledPreferenceStopsWithoutStarting()
+    {
+        var ensureCalls = 0;
+        var stopCalls = 0;
+        (bool Success, string Error) EnsureToolbar()
+        {
+            ensureCalls++;
+            return (true, string.Empty);
+        }
+        void StopToolbar() => stopCalls++;
+
+        var enabled = ExplorerDesktopShellHost.ConfigureToolbar(
+            showToolbar: true,
+            EnsureToolbar,
+            StopToolbar);
+        var disabled = ExplorerDesktopShellHost.ConfigureToolbar(
+            showToolbar: false,
+            EnsureToolbar,
+            StopToolbar);
+
+        Assert.True(enabled.Success);
+        Assert.True(disabled.Success);
+        Assert.Equal(1, ensureCalls);
+        Assert.Equal(1, stopCalls);
     }
 
     [Fact]

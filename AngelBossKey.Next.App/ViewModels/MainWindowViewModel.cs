@@ -444,6 +444,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     SceneId = SelectedScene.Id,
                     SceneName = SelectedScene.Name,
                     ShellMode = SelectedScene.PrivacyShellMode,
+                    ShowToolbar = SelectedScene.ShowPrivacyToolbar,
                     LaunchItems = LaunchItems.Select(item => item.ToModel()).ToList()
                 });
                 if (desktopResult.Success)

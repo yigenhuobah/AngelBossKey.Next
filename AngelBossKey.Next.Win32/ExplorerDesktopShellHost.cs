@@ -28,6 +28,7 @@ internal sealed class ExplorerDesktopShellHost(
     private nint _toolbarProcessHandle;
     private uint _toolbarProcessId;
     private CancellationTokenSource? _monitorShutdown;
+    private bool _showToolbar = true;
     private bool _disposed;
 
     internal event EventHandler? Exited;
@@ -88,18 +89,20 @@ internal sealed class ExplorerDesktopShellHost(
 
     internal (bool Success, string Message) EnsureReady(
         Guid sceneId,
+        bool showToolbar,
         CancellationToken cancellationToken)
     {
         lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var hadWorkspace = _jobHandle != 0;
+            _showToolbar = showToolbar;
             ReleaseExitedProcessHandle();
             if (TryAdoptReadyShell())
             {
                 try
                 {
-                    if (!EnsureToolbarReady(sceneId, cancellationToken, out var toolbarError))
+                    if (!EnsureToolbarState(sceneId, showToolbar, cancellationToken, out var toolbarError))
                     {
                         StopShell(closeWorkspace: !hadWorkspace);
                         return (false, toolbarError);
@@ -110,7 +113,11 @@ internal sealed class ExplorerDesktopShellHost(
                     StopShell(closeWorkspace: !hadWorkspace);
                     throw;
                 }
-                StartProcessMonitor(_processHandle, _processId, _toolbarProcessHandle);
+                StartProcessMonitor(
+                    _processHandle,
+                    _processId,
+                    _toolbarProcessHandle,
+                    showToolbar);
                 return (true, "完整 Explorer 桌面已就绪。");
             }
             if (_processHandle == 0 && !StartExplorer(out var error)) return (false, error);
@@ -123,12 +130,16 @@ internal sealed class ExplorerDesktopShellHost(
                     cancellationToken.ThrowIfCancellationRequested();
                     if (TryAdoptReadyShell())
                     {
-                        if (!EnsureToolbarReady(sceneId, cancellationToken, out var toolbarError))
+                        if (!EnsureToolbarState(sceneId, showToolbar, cancellationToken, out var toolbarError))
                         {
                             StopShell(closeWorkspace: !hadWorkspace);
                             return (false, toolbarError);
                         }
-                        StartProcessMonitor(_processHandle, _processId, _toolbarProcessHandle);
+                        StartProcessMonitor(
+                            _processHandle,
+                            _processId,
+                            _toolbarProcessHandle,
+                            showToolbar);
                         _log.Info("desktop.explorer", $"ready=true; pid={_processId}");
                         return (true, "完整 Explorer 桌面已就绪。");
                     }
@@ -346,6 +357,29 @@ internal sealed class ExplorerDesktopShellHost(
         return false;
     }
 
+    private bool EnsureToolbarState(
+        Guid sceneId,
+        bool showToolbar,
+        CancellationToken cancellationToken,
+        out string error)
+    {
+        var result = ConfigureToolbar(
+            showToolbar,
+            () =>
+            {
+                var success = EnsureToolbarReady(sceneId, cancellationToken, out var toolbarError);
+                return (success, toolbarError);
+            },
+            StopToolbar);
+        if (!showToolbar)
+        {
+            _log.Info("desktop.toolbar", "enabled=false");
+        }
+
+        error = result.Error;
+        return result.Success;
+    }
+
     private nint FindVisibleWindow(uint processId)
     {
         nint found = 0;
@@ -409,20 +443,33 @@ internal sealed class ExplorerDesktopShellHost(
 
     private bool IsReadyCore() =>
         !_disposed && IsProcessRunning(_processHandle) && FindCompleteShellProcess() == _processId &&
-        IsProcessRunning(_toolbarProcessHandle) && FindVisibleWindow(_toolbarProcessId) != 0;
+        IsToolbarSatisfied(
+            _showToolbar,
+            IsProcessRunning(_toolbarProcessHandle),
+            !_showToolbar || FindVisibleWindow(_toolbarProcessId) != 0);
 
-    private void StartProcessMonitor(nint processHandle, uint processId, nint toolbarProcessHandle)
+    private void StartProcessMonitor(
+        nint processHandle,
+        uint processId,
+        nint toolbarProcessHandle,
+        bool showToolbar)
     {
         StopProcessMonitor();
         var shutdown = new CancellationTokenSource();
         _monitorShutdown = shutdown;
-        _ = MonitorProcessAsync(processHandle, processId, toolbarProcessHandle, shutdown.Token);
+        _ = MonitorProcessAsync(
+            processHandle,
+            processId,
+            toolbarProcessHandle,
+            showToolbar,
+            shutdown.Token);
     }
 
     private async Task MonitorProcessAsync(
         nint processHandle,
         uint processId,
         nint toolbarProcessHandle,
+        bool showToolbar,
         CancellationToken cancellationToken)
     {
         try
@@ -435,7 +482,10 @@ internal sealed class ExplorerDesktopShellHost(
                     if (cancellationToken.IsCancellationRequested || _disposed ||
                         processHandle != _processHandle) return;
                     if (IsProcessRunning(processHandle) && FindCompleteShellProcess() == processId &&
-                        IsProcessRunning(toolbarProcessHandle)) continue;
+                        IsToolbarSatisfied(
+                            showToolbar,
+                            IsProcessRunning(toolbarProcessHandle),
+                            hasVisibleWindow: true)) continue;
                 }
 
                 _log.Warning("desktop.explorer.exit", $"pid={processId}");
@@ -479,6 +529,18 @@ internal sealed class ExplorerDesktopShellHost(
     {
         if (_toolbarProcessHandle == 0 || IsProcessRunning(_toolbarProcessHandle)) return;
         NativeMethods.CloseHandle(_toolbarProcessHandle);
+        _toolbarProcessHandle = 0;
+        _toolbarProcessId = 0;
+    }
+
+    private void StopToolbar()
+    {
+        if (_toolbarProcessHandle != 0 && IsProcessRunning(_toolbarProcessHandle))
+        {
+            NativeMethods.TerminateProcess(_toolbarProcessHandle, 0);
+            WaitForProcessExit(_toolbarProcessHandle, 750);
+        }
+        if (_toolbarProcessHandle != 0) NativeMethods.CloseHandle(_toolbarProcessHandle);
         _toolbarProcessHandle = 0;
         _toolbarProcessId = 0;
     }
@@ -545,6 +607,24 @@ internal sealed class ExplorerDesktopShellHost(
     private static bool IsProcessRunning(nint processHandle) =>
         processHandle != 0 &&
         NativeMethods.WaitForSingleObject(processHandle, 0) == NativeMethods.WaitTimeout;
+
+    internal static bool IsToolbarSatisfied(
+        bool showToolbar,
+        bool processRunning,
+        bool hasVisibleWindow) =>
+        !showToolbar || (processRunning && hasVisibleWindow);
+
+    internal static (bool Success, string Error) ConfigureToolbar(
+        bool showToolbar,
+        Func<(bool Success, string Error)> ensureToolbar,
+        Action stopToolbar)
+    {
+        ArgumentNullException.ThrowIfNull(ensureToolbar);
+        ArgumentNullException.ThrowIfNull(stopToolbar);
+        if (showToolbar) return ensureToolbar();
+        stopToolbar();
+        return (true, string.Empty);
+    }
 
     private void WaitForProcessExit(nint processHandle, uint timeoutMilliseconds)
     {

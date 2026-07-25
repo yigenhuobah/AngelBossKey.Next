@@ -124,6 +124,12 @@
                           Width="178" Height="34" Margin="12,0,0,0"
                           ToolTip="完整桌面优先启动 Explorer，失败时自动回退到轻量 Shell"
                           AutomationProperties.Name="独立桌面模式" />
+                <CheckBox Content="右上角菜单"
+                          IsChecked="{Binding SelectedScene.ShowPrivacyToolbar}"
+                          IsEnabled="{Binding CanEditPrivacyToolbar}"
+                          VerticalAlignment="Center" Margin="12,0,0,0"
+                          ToolTip="仅用于完整 Explorer 桌面；关闭后仍可用场景热键或 Ctrl+Alt+Shift+F12 返回"
+                          AutomationProperties.Name="显示独立桌面右上角菜单" />
             </StackPanel>
         </Grid>
 

@@ -9,6 +9,7 @@ public sealed class SceneRowViewModel : ObservableObject
     private HotkeyGesture _hotkey;
     private SceneMode _mode;
     private PrivacyDesktopShellMode _privacyShellMode;
+    private bool _showPrivacyToolbar;
     private int _idleMinutes;
     private MouseAutomationTrigger _mouseTrigger;
     private bool _enableLowLevelMouseHook;
@@ -23,6 +24,7 @@ public sealed class SceneRowViewModel : ObservableObject
         _hotkey = scene.Hotkey;
         _mode = scene.Mode;
         _privacyShellMode = scene.PrivacyShellMode;
+        _showPrivacyToolbar = scene.ShowPrivacyToolbar;
         _targets = [.. scene.Targets];
         _launchItems = [.. scene.LaunchItems];
         _idleMinutes = scene.Automation.IdleMinutes;
@@ -50,6 +52,11 @@ public sealed class SceneRowViewModel : ObservableObject
     {
         get => _privacyShellMode;
         set => SetProperty(ref _privacyShellMode, value);
+    }
+    public bool ShowPrivacyToolbar
+    {
+        get => _showPrivacyToolbar;
+        set => SetProperty(ref _showPrivacyToolbar, value);
     }
     public bool IsPrivacyDesktop
     {
@@ -90,6 +97,7 @@ public sealed class SceneRowViewModel : ObservableObject
         Hotkey = Hotkey,
         Mode = Mode,
         PrivacyShellMode = PrivacyShellMode,
+        ShowPrivacyToolbar = ShowPrivacyToolbar,
         Targets = [.. _targets],
         LaunchItems = [.. _launchItems],
         Automation = ToAutomation()

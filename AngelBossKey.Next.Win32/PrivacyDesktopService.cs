@@ -83,13 +83,19 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
                     context,
                     shellMode,
                     request.SceneId,
+                    request.ShowToolbar,
                     cancellationToken);
                 if (!existingShell.Success) return (false, existingShell.Message);
                 shellMessage = "已重新进入保留的独立工作区。";
             }
             else
             {
-                var shell = await PrepareShellAsync(context, shellMode, request.SceneId, cancellationToken);
+                var shell = await PrepareShellAsync(
+                    context,
+                    shellMode,
+                    request.SceneId,
+                    request.ShowToolbar,
+                    cancellationToken);
                 if (!shell.Success) return (false, shell.Message);
                 shellMode = shell.Mode;
                 shellMessage = shell.Message;
@@ -374,6 +380,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         DesktopContext context,
         PrivacyDesktopShellMode requestedMode,
         Guid sceneId,
+        bool showToolbar,
         CancellationToken cancellationToken)
     {
         if (requestedMode == PrivacyDesktopShellMode.Compatibility)
@@ -390,7 +397,7 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
 
         context.CompatibleShell.Stop();
         var explorer = await Task.Run(
-            () => context.ExplorerShell.EnsureReady(sceneId, cancellationToken),
+            () => context.ExplorerShell.EnsureReady(sceneId, showToolbar, cancellationToken),
             cancellationToken);
         if (explorer.Success)
         {
@@ -414,9 +421,10 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         DesktopContext context,
         PrivacyDesktopShellMode mode,
         Guid sceneId,
+        bool showToolbar,
         CancellationToken cancellationToken) => mode == PrivacyDesktopShellMode.FullExplorer
             ? await Task.Run(
-                () => context.ExplorerShell.EnsureReady(sceneId, cancellationToken),
+                () => context.ExplorerShell.EnsureReady(sceneId, showToolbar, cancellationToken),
                 cancellationToken)
             : await Task.Run(
                 () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),

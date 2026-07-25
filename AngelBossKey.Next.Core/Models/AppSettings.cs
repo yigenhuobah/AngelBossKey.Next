@@ -63,6 +63,7 @@ public sealed record SceneProfile
     public AutomationSettings Automation { get; init; } = new();
     public SceneMode Mode { get; init; }
     public PrivacyDesktopShellMode PrivacyShellMode { get; init; } = PrivacyDesktopShellMode.FullExplorer;
+    public bool ShowPrivacyToolbar { get; init; } = true;
     public List<WorkspaceLaunchItem> LaunchItems { get; init; } = [];
 }
 
@@ -83,5 +84,6 @@ public sealed record PrivacyDesktopLaunchRequest
     public Guid SceneId { get; init; }
     public string SceneName { get; init; } = string.Empty;
     public PrivacyDesktopShellMode ShellMode { get; init; } = PrivacyDesktopShellMode.FullExplorer;
+    public bool ShowToolbar { get; init; } = true;
     public IReadOnlyList<WorkspaceLaunchItem> LaunchItems { get; init; } = [];
 }
