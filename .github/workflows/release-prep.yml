@@ -1,0 +1,44 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version from Directory.Build.props, for example 0.9.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare unsigned release candidate
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Prepare unsigned candidate
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          .\eng\prepare-release.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -OutputDirectory "$env:GITHUB_WORKSPACE\artifacts\release"
+
+      - name: Upload unsigned release preparation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AngelBossKey.Next-v${{ inputs.version }}-unsigned-preparation
+          path: artifacts/release
+          if-no-files-found: error
+          retention-days: 14

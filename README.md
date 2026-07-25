@@ -6,7 +6,7 @@
 
 ## 第一次使用
 
-1. 打开 `dist\AngelBossKey.Next-v0.8.0-win-x64`，运行 `AngelBossKey.Next.exe`。
+1. 从 Releases 下载最新的 `AngelBossKey.Next-v<版本>-win-x64.zip`，解压后运行 `AngelBossKey.Next.exe`。
 2. 先打开准备隐藏的程序，再回到天使老板键 Next，点击“添加程序”。
 3. 在窗口列表中勾选目标并确认。添加的是该程序的可执行文件规则，不只是当时选中的单个窗口。
 4. 点击右上角的热键按钮，按下“至少一个修饰键 + 一个普通按键”，例如 `Ctrl+Alt+H`，然后保存。
@@ -179,7 +179,7 @@
 
 程序不发起网络请求，也不包含遥测。开机启动使用当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，命令包含程序绝对路径和 `--background` 参数。移动程序目录后，下次正常启动会自动修复启动路径。
 
-## v0.8 功能概览
+## 功能概览
 
 - 多场景配置，每个场景拥有独立热键、目标规则、自动化、工作模式和独立桌面启动项。
 - 托盘快速切换场景，支持场景复制、单场景导入导出、5 秒试运行及热键总览。
@@ -209,9 +209,9 @@ dotnet publish .\AngelBossKey.Next.App\AngelBossKey.Next.App.csproj -p:PublishPr
 
 它会依次执行依赖还原、`dotnet format` 校验、启用 SDK `Recommended` Roslyn analyzers 的 Release 构建，以及完整测试。所有编译和 analyzer 告警都会按错误处理。需要自动修复格式时运行 `.\eng\quality.ps1 -Fix`；依赖已经还原时可追加 `-SkipRestore`。追加 `-Coverage` 会生成 Cobertura 覆盖率报告并打印行覆盖率与分支覆盖率，报告保存在被 Git 忽略的 `artifacts\coverage-*` 目录。
 
-计划公开仓库前，请先阅读 [贡献指南](CONTRIBUTING.md)、[安全策略](SECURITY.md) 和 [发布清单](RELEASING.md)。本项目采用 [MIT License](LICENSE)。
+计划公开仓库前，请先阅读 [贡献指南](CONTRIBUTING.md)、[安全策略](SECURITY.md)、[发布清单](RELEASING.md)、[发布验收指引](docs/release-validation.md) 和 [变更日志](CHANGELOG.md)。本项目采用 [MIT License](LICENSE)。
 
-发布输出位于 `dist\AngelBossKey.Next-v0.8.0-win-x64`。运行 `AngelBossKey.Next.exe` 即可，无需安装。自包含包固定携带稳定版 .NET 10.0.10 运行时。
+便携构建默认输出到 `dist\AngelBossKey.Next-v<版本>-win-x64`，其中版本只在 `Directory.Build.props` 中维护。运行 `AngelBossKey.Next.exe` 即可，无需安装。自包含包固定携带稳定版 .NET 10.0.10 运行时。
 
 ## 许可证
 
