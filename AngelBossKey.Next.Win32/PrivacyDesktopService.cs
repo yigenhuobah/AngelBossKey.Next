@@ -383,52 +383,32 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         bool showToolbar,
         CancellationToken cancellationToken)
     {
-        if (requestedMode == PrivacyDesktopShellMode.Compatibility)
-        {
-            context.ExplorerShell.Stop();
-            var compatible = await Task.Run(
-                () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
-                cancellationToken);
-            return new ShellPreparationResult(
-                compatible.Success,
-                PrivacyDesktopShellMode.Compatibility,
-                compatible.Message);
-        }
-
-        context.CompatibleShell.Stop();
         var explorer = await Task.Run(
-            () => context.ExplorerShell.EnsureReady(sceneId, showToolbar, cancellationToken),
+            () => PrivacyDesktopShellCoordinator.Prepare(
+                requestedMode,
+                () => context.ExplorerShell.EnsureReady(sceneId, showToolbar, cancellationToken),
+                () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
+                context.ExplorerShell.Stop,
+                context.CompatibleShell.Stop),
             cancellationToken);
-        if (explorer.Success)
+        if (explorer.UsedFallback)
         {
-            return new ShellPreparationResult(true, PrivacyDesktopShellMode.FullExplorer, explorer.Message);
+            _log.Warning("desktop.shell.fallback", $"success={explorer.Success}");
         }
-
-        var fallback = await Task.Run(
-            () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
-            cancellationToken);
-        var message = fallback.Success
-            ? $"{explorer.Message} 已自动回退到兼容轻量桌面。"
-            : $"{explorer.Message} 兼容轻量桌面也未能启动：{fallback.Message}";
-        _log.Warning("desktop.shell.fallback", $"success={fallback.Success}");
-        return new ShellPreparationResult(
-            fallback.Success,
-            PrivacyDesktopShellMode.Compatibility,
-            message);
+        return explorer;
     }
 
-    private static async Task<(bool Success, string Message)> EnsureShellReadyAsync(
+    private static Task<(bool Success, string Message)> EnsureShellReadyAsync(
         DesktopContext context,
         PrivacyDesktopShellMode mode,
         Guid sceneId,
         bool showToolbar,
-        CancellationToken cancellationToken) => mode == PrivacyDesktopShellMode.FullExplorer
-            ? await Task.Run(
+        CancellationToken cancellationToken) => Task.Run(
+            () => PrivacyDesktopShellCoordinator.EnsureExisting(
+                mode,
                 () => context.ExplorerShell.EnsureReady(sceneId, showToolbar, cancellationToken),
-                cancellationToken)
-            : await Task.Run(
-                () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken),
-                cancellationToken);
+                () => context.CompatibleShell.EnsureReady(sceneId, cancellationToken)),
+            cancellationToken);
 
     private sealed record DesktopContext(
         nint Desktop,
@@ -464,11 +444,6 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             else CompatibleShell.Reset();
         }
     }
-
-    private sealed record ShellPreparationResult(
-        bool Success,
-        PrivacyDesktopShellMode Mode,
-        string Message);
 
     private void MarkReturned(string eventName)
     {

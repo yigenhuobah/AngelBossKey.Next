@@ -336,6 +336,8 @@ public partial class App : System.Windows.Application
         _automationService?.Dispose();
         if (sessionEnding)
         {
+            // Session-ending is a synchronous WPF callback. ReturnAsync only performs
+            // the bounded desktop switch here; full service disposal is deferred to exit.
             try { _privacyDesktop?.ReturnAsync().GetAwaiter().GetResult(); }
             catch (Exception exception) { _diagnosticLog?.LogError("desktop.session-ending", exception); }
         }

@@ -1,3 +1,4 @@
+using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Win32;
 using System.Diagnostics;
 
@@ -96,6 +97,89 @@ public sealed class AutomationBehaviorTests
         Assert.True(disabled.Success);
         Assert.Equal(1, ensureCalls);
         Assert.Equal(1, stopCalls);
+    }
+
+    [Fact]
+    public void PrivacyDesktopShell_FullExplorerKeepsExplorerWhenReady()
+    {
+        var events = new List<string>();
+
+        var result = PrivacyDesktopShellCoordinator.Prepare(
+            PrivacyDesktopShellMode.FullExplorer,
+            () =>
+            {
+                events.Add("explorer");
+                return (true, "explorer-ready");
+            },
+            () =>
+            {
+                events.Add("compatible");
+                return (true, "compatible-ready");
+            },
+            () => events.Add("stop-explorer"),
+            () => events.Add("stop-compatible"));
+
+        Assert.True(result.Success);
+        Assert.Equal(PrivacyDesktopShellMode.FullExplorer, result.Mode);
+        Assert.False(result.UsedFallback);
+        Assert.Equal(["stop-compatible", "explorer"], events);
+    }
+
+    [Fact]
+    public void PrivacyDesktopShell_FallsBackToCompatibilityWhenExplorerFails()
+    {
+        var events = new List<string>();
+
+        var result = PrivacyDesktopShellCoordinator.Prepare(
+            PrivacyDesktopShellMode.FullExplorer,
+            () =>
+            {
+                events.Add("explorer");
+                return (false, "explorer-failed");
+            },
+            () =>
+            {
+                events.Add("compatible");
+                return (true, "compatible-ready");
+            },
+            () => events.Add("stop-explorer"),
+            () => events.Add("stop-compatible"));
+
+        Assert.True(result.Success);
+        Assert.Equal(PrivacyDesktopShellMode.Compatibility, result.Mode);
+        Assert.True(result.UsedFallback);
+        Assert.Contains("explorer-failed", result.Message);
+        Assert.Equal(["stop-compatible", "explorer", "compatible"], events);
+    }
+
+    [Fact]
+    public void PrivacyDesktopShell_CompatibilityDoesNotStartExplorer()
+    {
+        var explorerCalls = 0;
+        var compatibleCalls = 0;
+        var stopExplorerCalls = 0;
+
+        var result = PrivacyDesktopShellCoordinator.Prepare(
+            PrivacyDesktopShellMode.Compatibility,
+            () =>
+            {
+                explorerCalls++;
+                return (true, "unexpected");
+            },
+            () =>
+            {
+                compatibleCalls++;
+                return (true, "compatible-ready");
+            },
+            () => stopExplorerCalls++,
+            () => { });
+
+        Assert.True(result.Success);
+        Assert.Equal(PrivacyDesktopShellMode.Compatibility, result.Mode);
+        Assert.False(result.UsedFallback);
+        Assert.Equal(0, explorerCalls);
+        Assert.Equal(1, compatibleCalls);
+        Assert.Equal(1, stopExplorerCalls);
     }
 
     [Fact]

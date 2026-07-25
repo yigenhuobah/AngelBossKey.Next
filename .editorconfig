@@ -20,6 +20,9 @@ dotnet_diagnostic.IDE0005.severity = suggestion
 [AngelBossKey.Next.Tests/*.cs]
 # Behavior_Result names make the xUnit suite easier to scan.
 dotnet_diagnostic.CA1707.severity = none
+# xUnit v3 flags every optional token in the existing integration suite. Keep
+# this staged migration non-blocking while tests are incrementally token-aware.
+dotnet_diagnostic.xUnit1051.severity = suggestion
 
 [AngelBossKey.Next.App/App.xaml.cs]
 # WPF owns the Application lifetime; DisposeServices releases its owned services.

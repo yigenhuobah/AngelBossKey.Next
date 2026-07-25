@@ -17,6 +17,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     private Task? _monitorTask;
     private bool _disposed;
     private bool _isActive;
+    private int _pendingRestoreCount;
 
     public ApplicationAudioController(IDiagnosticLog? diagnosticLog = null)
         : this(new NAudioSessionBackend(), new NullAudioRecoveryStore(), diagnosticLog)
@@ -47,8 +48,13 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     {
         get
         {
-            _gate.Wait();
-            try { return _isActive ? 0 : _savedSessions.Count; }
+            if (!_gate.Wait(0)) return Volatile.Read(ref _pendingRestoreCount);
+            try
+            {
+                var count = _isActive ? 0 : _savedSessions.Count;
+                Volatile.Write(ref _pendingRestoreCount, count);
+                return count;
+            }
             finally { _gate.Release(); }
         }
     }
@@ -63,6 +69,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             _activeTargets = targets.Where(target => target.Enabled && target.MuteWhenHidden).ToArray();
             var changed = await CaptureAndMuteAsync(cancellationToken);
             Volatile.Write(ref _isActive, _activeTargets.Length > 0);
+            Volatile.Write(ref _pendingRestoreCount, _isActive ? 0 : _savedSessions.Count);
             EnsureMonitorStarted();
 
             _log.Info("audio.mute", $"sessions={changed}; targets={_activeTargets.Length}");
@@ -98,6 +105,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                 _log.LogError("audio.reconcile", exception);
             }
             Volatile.Write(ref _isActive, _activeTargets.Length > 0);
+            Volatile.Write(ref _pendingRestoreCount, _isActive ? 0 : _savedSessions.Count);
         }
         finally
         {
@@ -117,6 +125,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                 var attempt = RestoreSessions(_savedSessions.Keys.ToHashSet(StringComparer.Ordinal));
                 RetainOnly(attempt.FailedSessionIds);
                 await SaveOrClearJournalAsync(cancellationToken);
+                Volatile.Write(ref _pendingRestoreCount, _savedSessions.Count);
                 EnsureMonitorStarted();
                 _log.Info("audio.restore", $"sessions={attempt.RestoredCount}; pending={_savedSessions.Count}");
                 return attempt.RestoredCount;
@@ -146,11 +155,13 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             {
                 _savedSessions[session.SessionId] = session;
             }
+            Volatile.Write(ref _pendingRestoreCount, _savedSessions.Count);
             try
             {
                 var attempt = RestoreSessions(_savedSessions.Keys.ToHashSet(StringComparer.Ordinal));
                 RetainOnly(attempt.FailedSessionIds);
                 await SaveOrClearJournalAsync(cancellationToken);
+                Volatile.Write(ref _pendingRestoreCount, _savedSessions.Count);
                 EnsureMonitorStarted();
                 if (attempt.RestoredCount > 0) _log.Info("audio.recover", $"sessions={attempt.RestoredCount}");
                 return attempt.RestoredCount;
@@ -205,6 +216,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                         if (_savedSessions.Count != before)
                         {
                             await SaveOrClearJournalAsync(cancellationToken);
+                            Volatile.Write(ref _pendingRestoreCount, _savedSessions.Count);
                             _log.Info("audio.restore.retry", $"sessions={attempt.RestoredCount}; pending={_savedSessions.Count}");
                         }
                     }

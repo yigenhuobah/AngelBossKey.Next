@@ -193,7 +193,7 @@
 
 ## 开发
 
-要求 Windows 10 22H2 或 Windows 11 x64，以及 .NET 10 SDK。
+要求 Windows 10 22H2 或 Windows 11 x64，以及稳定版 .NET 10 SDK 10.0.302（仓库中的 `global.json` 会阻止预览版 SDK）。
 
 ```powershell
 dotnet build .\AngelBossKey.Next.slnx -c Release
