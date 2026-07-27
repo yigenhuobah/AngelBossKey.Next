@@ -2,12 +2,14 @@ using AngelBossKey.Next.App.Infrastructure;
 using AngelBossKey.Next.App.Services;
 using AngelBossKey.Next.App.ViewModels;
 using AngelBossKey.Next.Core.Abstractions;
+using AngelBossKey.Next.Core.Models;
 using AngelBossKey.Next.Core.Storage;
 using AngelBossKey.Next.Win32;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Threading;
 
 namespace AngelBossKey.Next.App;
 
@@ -29,6 +31,7 @@ public partial class App : System.Windows.Application
     private bool _isExiting;
     private bool _servicesDisposed;
     private bool _activationPending;
+    private int _trayStateRefreshQueued;
     private uint _taskbarCreatedMessage;
 
     public static App Instance => (App)Current;
@@ -107,7 +110,18 @@ public partial class App : System.Windows.Application
         var settingsStore = new JsonSettingsStore(Path.Combine(dataDirectory, "settings.json"));
         var recoveryStore = new JsonRecoveryStore(Path.Combine(dataDirectory, "recovery.json"));
         var audioRecoveryStore = new JsonAudioRecoveryStore(Path.Combine(dataDirectory, "audio-recovery.json"));
-        var settings = await settingsStore.LoadAsync();
+        AppSettings settings;
+        try
+        {
+            settings = await settingsStore.LoadAsync();
+            await recoveryStore.LoadAsync();
+            await audioRecoveryStore.LoadAsync();
+        }
+        catch (Exception exception) when (IsPersistentStateReadFailure(exception))
+        {
+            StopAfterPersistentStateReadFailure(exception);
+            return;
+        }
 
         var windowCatalog = new WindowCatalog();
         var elevatedBroker = new ElevatedWindowBrokerClient(
@@ -120,6 +134,18 @@ public partial class App : System.Windows.Application
             _diagnosticLog,
             elevatedBroker);
         _audioController = new ApplicationAudioController(audioRecoveryStore, _diagnosticLog);
+        VisibilityOperationResult recovered;
+        try
+        {
+            await _audioController.RecoverAsync();
+            recovered = await _visibilityController.RecoverAsync();
+        }
+        catch (Exception exception) when (IsPersistentStateReadFailure(exception))
+        {
+            StopAfterPersistentStateReadFailure(exception);
+            return;
+        }
+
         _automationService = new AutomationTriggerService(_diagnosticLog);
         _privacyDesktop = new PrivacyDesktopService(_diagnosticLog);
         var startupRegistration = new StartupRegistration();
@@ -153,9 +179,6 @@ public partial class App : System.Windows.Application
                 () => _viewModel.HandleAutomationAsync(args.Source),
                 "automation.dispatch");
         await _viewModel.InitializeAsync();
-
-        await _audioController.RecoverAsync();
-        var recovered = await _visibilityController.RecoverAsync();
         _viewModel.SetRecoveryResult(recovered);
 
         _windowEventWatcher = new WindowEventWatcher(_visibilityController, _diagnosticLog);
@@ -180,16 +203,12 @@ public partial class App : System.Windows.Application
             }
         };
         RefreshTrayScenes();
-        _visibilityController.StateChanged += (_, _) =>
-            Dispatcher.Invoke(() => _trayIcon?.Update(_visibilityController.IsHidden));
-        _privacyDesktop.StateChanged += (_, _) =>
-            Dispatcher.Invoke(() => _trayIcon?.Update(_privacyDesktop.IsActive || _visibilityController.IsHidden));
+        _visibilityController.StateChanged += (_, _) => QueueTrayStateRefresh();
+        _privacyDesktop.StateChanged += (_, _) => QueueTrayStateRefresh();
 
         var background = e.Args.Any(argument =>
             string.Equals(argument, "--background", StringComparison.OrdinalIgnoreCase));
-        var activeScene = settings.Scenes.FirstOrDefault(scene => scene.Id == settings.ActiveSceneId)
-            ?? settings.Scenes.FirstOrDefault();
-        if (_activationPending || !background || activeScene?.Hotkey.IsConfigured != true)
+        if (_activationPending || !background || !_viewModel.CanToggle)
         {
             ShowMainWindow();
         }
@@ -310,6 +329,70 @@ public partial class App : System.Windows.Application
                 $"{scene.Name}  [{scene.HotkeyText}]")),
             _viewModel.SelectedScene.Id);
     }
+
+    private void QueueTrayStateRefresh()
+    {
+        if (_isExiting || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished ||
+            Interlocked.Exchange(ref _trayStateRefreshQueued, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                // Clear the coalescing flag before reading state. A change that
+                // races with this update can then schedule a follow-up refresh.
+                Volatile.Write(ref _trayStateRefreshQueued, 0);
+                if (_isExiting || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+                {
+                    return;
+                }
+
+                _trayIcon?.Update(
+                    _privacyDesktop?.IsActive == true || _visibilityController?.IsHidden == true);
+            }, DispatcherPriority.Background);
+        }
+        catch (InvalidOperationException)
+        {
+            Volatile.Write(ref _trayStateRefreshQueued, 0);
+            // The WPF dispatcher is already shutting down.
+        }
+    }
+
+    private void StopAfterPersistentStateReadFailure(Exception exception)
+    {
+        _isExiting = true;
+        _diagnosticLog?.LogError("app.startup.storage-read", exception);
+        try
+        {
+            System.Windows.MessageBox.Show(
+                "无法读取应用配置或恢复数据。为避免覆盖现有文件，天使老板键 Next 未启动。请关闭正在占用这些文件的程序后重试。",
+                "天使老板键 Next",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch (Exception displayException)
+        {
+            _diagnosticLog?.LogError("app.startup.storage-read.display", displayException);
+        }
+        finally
+        {
+            try
+            {
+                DisposeServices();
+            }
+            finally
+            {
+                Shutdown(-1);
+            }
+        }
+    }
+
+    private static bool IsPersistentStateReadFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or InvalidDataException or
+            System.Text.Json.JsonException;
 
     private nint WindowProcedure(nint window, int message, nint wParam, nint lParam, ref bool handled)
     {

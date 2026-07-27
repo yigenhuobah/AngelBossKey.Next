@@ -139,6 +139,18 @@ public sealed class CoreBehaviorTests : IDisposable
     }
 
     [Fact]
+    public async Task SettingsStore_PropagatesAnExclusiveFileLock()
+    {
+        var path = Path.Combine(_directory, "settings.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, "{}");
+
+        using var lockStream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        await Assert.ThrowsAsync<IOException>(() => new JsonSettingsStore(path).LoadAsync());
+    }
+
+    [Fact]
     public async Task SettingsStore_NormalizesNullCollectionsFromExternalEdits()
     {
         Directory.CreateDirectory(_directory);
@@ -460,6 +472,38 @@ public sealed class CoreBehaviorTests : IDisposable
     }
 
     [Fact]
+    public async Task RecoveryStore_PropagatesAnExclusiveFileLock()
+    {
+        var path = Path.Combine(_directory, "recovery.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, "{}");
+
+        using var lockStream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        await Assert.ThrowsAsync<IOException>(() => new JsonRecoveryStore(path).LoadAsync());
+    }
+
+    [Fact]
+    public async Task RecoveryStore_PropagatesCorruptJson()
+    {
+        var path = Path.Combine(_directory, "recovery.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, "{broken");
+
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => new JsonRecoveryStore(path).LoadAsync());
+    }
+
+    [Fact]
+    public async Task RecoveryStore_RejectsAnUnsupportedSchema()
+    {
+        var path = Path.Combine(_directory, "recovery.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, """{"schemaVersion":2}""");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => new JsonRecoveryStore(path).LoadAsync());
+    }
+
+    [Fact]
     public async Task AudioRecoveryStore_RoundTripsOriginalSessionStateAndClears()
     {
         var path = Path.Combine(_directory, "audio-recovery.json");
@@ -486,6 +530,38 @@ public sealed class CoreBehaviorTests : IDisposable
 
         Assert.Equal(state.Sessions[0], Assert.Single(loaded.Sessions));
         Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task AudioRecoveryStore_PropagatesAnExclusiveFileLock()
+    {
+        var path = Path.Combine(_directory, "audio-recovery.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, "{}");
+
+        using var lockStream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        await Assert.ThrowsAsync<IOException>(() => new JsonAudioRecoveryStore(path).LoadAsync());
+    }
+
+    [Fact]
+    public async Task AudioRecoveryStore_PropagatesCorruptJson()
+    {
+        var path = Path.Combine(_directory, "audio-recovery.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, "{broken");
+
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => new JsonAudioRecoveryStore(path).LoadAsync());
+    }
+
+    [Fact]
+    public async Task AudioRecoveryStore_RejectsAnUnsupportedSchema()
+    {
+        var path = Path.Combine(_directory, "audio-recovery.json");
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllTextAsync(path, """{"schemaVersion":2}""");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => new JsonAudioRecoveryStore(path).LoadAsync());
     }
 
     [Fact]

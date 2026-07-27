@@ -62,7 +62,8 @@ public sealed class WindowCatalog : IWindowCatalog
         string processName;
         try
         {
-            processName = Process.GetProcessById((int)processId).ProcessName;
+            using var process = Process.GetProcessById((int)processId);
+            processName = process.ProcessName;
         }
         catch
         {

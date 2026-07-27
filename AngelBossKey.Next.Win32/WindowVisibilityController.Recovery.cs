@@ -61,18 +61,51 @@ public sealed partial class WindowVisibilityController
     }
 
     private async Task<bool> WaitForVisibilityAsync(
-        nint window,
+        HiddenWindowRecord record,
         bool visible,
         CancellationToken cancellationToken)
     {
+        var window = (nint)record.Handle;
         for (var attempt = 0; attempt < 20; attempt++)
         {
-            if (!_nativeActions.Exists((long)window)) return false;
-            if (_nativeActions.IsVisible((long)window) == visible) return true;
+            if (GetWindowIdentity(record, window) != WindowIdentityStatus.Same) return false;
+            if (_nativeActions.IsVisible(record.Handle) == visible) return true;
             await Task.Delay(25, cancellationToken);
         }
 
-        return _nativeActions.Exists((long)window) && _nativeActions.IsVisible((long)window) == visible;
+        return GetWindowIdentity(record, window) == WindowIdentityStatus.Same &&
+            _nativeActions.IsVisible(record.Handle) == visible;
+    }
+
+    private bool IsRestoreShowSuppressed(long handle)
+    {
+        if (!_restoreShowSuppressions.TryGetValue(handle, out var suppression))
+        {
+            return false;
+        }
+
+        if (suppression.ExpiresAt <= _timeProvider.GetUtcNow() ||
+            GetWindowIdentity(suppression.Record, (nint)handle) != WindowIdentityStatus.Same)
+        {
+            _restoreShowSuppressions.Remove(handle);
+            return false;
+        }
+
+        return true;
+    }
+
+    private void AddRestoreShowSuppression(HiddenWindowRecord record) =>
+        _restoreShowSuppressions[record.Handle] = new RestoreShowSuppression(
+            record,
+            _timeProvider.GetUtcNow() + RestoreShowSuppressionDuration);
+
+    private void RemoveRestoreShowSuppression(HiddenWindowRecord record)
+    {
+        if (_restoreShowSuppressions.TryGetValue(record.Handle, out var suppression) &&
+            suppression.Record == record)
+        {
+            _restoreShowSuppressions.Remove(record.Handle);
+        }
     }
 
     private static string FormatResult(VisibilityOperationResult result) =>
@@ -81,6 +114,10 @@ public sealed partial class WindowVisibilityController
     private sealed record RestoreOutcome(
         VisibilityOperationResult Result,
         IReadOnlyList<HiddenWindowRecord> Remaining);
+
+    private sealed record RestoreShowSuppression(
+        HiddenWindowRecord Record,
+        DateTimeOffset ExpiresAt);
 
     private enum WindowIdentityStatus
     {

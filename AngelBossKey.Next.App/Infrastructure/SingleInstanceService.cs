@@ -1,5 +1,4 @@
 using System.IO.Pipes;
-using System.Text;
 
 namespace AngelBossKey.Next.App.Infrastructure;
 
@@ -7,6 +6,7 @@ public sealed class SingleInstanceService : IDisposable
 {
     private const string MutexName = @"Local\AngelBossKey.Next.Singleton";
     private const string PipeName = "AngelBossKey.Next.Activation";
+    private static readonly byte[] ActivationMessage = "activate"u8.ToArray();
     private readonly Mutex _mutex;
     private readonly CancellationTokenSource _cancellation = new();
     private Task? _serverTask;
@@ -42,7 +42,8 @@ public sealed class SingleInstanceService : IDisposable
                     PipeDirection.Out,
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await client.ConnectAsync(300);
-                await client.WriteAsync(Encoding.UTF8.GetBytes("activate"));
+                await client.WriteAsync(ActivationMessage);
+                await client.FlushAsync();
                 return;
             }
             catch when (attempt < 7)
@@ -82,9 +83,21 @@ public sealed class SingleInstanceService : IDisposable
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await server.WaitForConnectionAsync(cancellationToken);
-                var buffer = new byte[32];
-                var length = await server.ReadAsync(buffer, cancellationToken);
-                if (Encoding.UTF8.GetString(buffer, 0, length) == "activate")
+                var buffer = new byte[ActivationMessage.Length];
+                var length = 0;
+                while (length < buffer.Length)
+                {
+                    var read = await server.ReadAsync(buffer.AsMemory(length), cancellationToken);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    length += read;
+                }
+
+                if (length == ActivationMessage.Length &&
+                    buffer.AsSpan().SequenceEqual(ActivationMessage))
                 {
                     ActivationRequested?.Invoke(this, EventArgs.Empty);
                 }
@@ -95,7 +108,19 @@ public sealed class SingleInstanceService : IDisposable
             }
             catch
             {
-                await Task.Delay(500, cancellationToken);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                try
+                {
+                    await Task.Delay(500, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
     }

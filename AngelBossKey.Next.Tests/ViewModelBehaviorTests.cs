@@ -33,6 +33,85 @@ public sealed class ViewModelBehaviorTests
     }
 
     [Fact]
+    public async Task AddTargets_RollsBackViewAndPersistedStateWhenTheFirstSaveFails()
+    {
+        var store = new FailFirstSettingsStore();
+        var viewModel = CreateViewModel(store, new FakeVisibilityController());
+
+        await viewModel.AddTargetsAsync([CreateWindowInfo()]);
+        await viewModel.FlushSettingsAsync();
+
+        Assert.Empty(viewModel.Targets);
+        Assert.Empty(viewModel.SelectedScene.Targets);
+        Assert.Empty(store.LastSaved!.Targets);
+        Assert.Empty(Assert.Single(store.LastSaved.Scenes).Targets);
+    }
+
+    [Fact]
+    public async Task AddTargets_RollsBackWhenHiddenRuleReconciliationFails()
+    {
+        var controller = new FakeVisibilityController { IsHidden = true, FailFirstUpdate = true };
+        var store = new MemorySettingsStore();
+        var viewModel = CreateViewModel(store, controller);
+
+        await viewModel.AddTargetsAsync([CreateWindowInfo()]);
+        await viewModel.FlushSettingsAsync();
+
+        Assert.Empty(viewModel.Targets);
+        Assert.Empty(viewModel.SelectedScene.Targets);
+        Assert.Empty(store.LastSaved!.Targets);
+        Assert.Empty(Assert.Single(store.LastSaved.Scenes).Targets);
+        Assert.True(controller.UpdateCalls >= 2);
+    }
+
+    [Fact]
+    public async Task FailedHotkeyRegistration_DisablesHidingForTheConfiguredScene()
+    {
+        var controller = new FakeVisibilityController();
+        var settings = CreateSettingsWithTargets("Editor") with
+        {
+            Hotkey = new HotkeyGesture
+            {
+                Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Alt,
+                VirtualKey = 0x31
+            }
+        };
+        var viewModel = CreateViewModel(new MemorySettingsStore(), controller, settings);
+
+        await viewModel.InitializeAsync();
+        var result = await viewModel.ToggleVisibilityAsync();
+
+        Assert.False(viewModel.CanToggle);
+        Assert.Equal(0, controller.HideCalls);
+        Assert.Equal(0, result.ChangedCount);
+        Assert.Contains("热键未成功注册", viewModel.Message);
+    }
+
+    [Fact]
+    public async Task LaunchAtLogin_RegistrationFailureRollsBackUiAndSettings()
+    {
+        var store = new MemorySettingsStore();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings(),
+            store,
+            new FakeVisibilityController(),
+            new ThrowingStartupRegistration(),
+            new GlobalHotkeyService());
+        var notifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.LaunchAtLogin)) notifications++;
+        };
+
+        viewModel.LaunchAtLogin = true;
+        await viewModel.FlushSettingsAsync();
+
+        Assert.False(viewModel.LaunchAtLogin);
+        Assert.True(notifications > 0);
+        Assert.False(store.LastSaved!.LaunchAtLogin);
+    }
+
+    [Fact]
     public async Task RestoreRemainsAvailableWithoutHotkeyOrEnabledTargets()
     {
         var controller = new FakeVisibilityController { IsHidden = true };
@@ -648,6 +727,16 @@ public sealed class ViewModelBehaviorTests
             }).ToList()
     };
 
+    private static WindowInfo CreateWindowInfo() => new()
+    {
+        Handle = 1,
+        ProcessId = 2,
+        Title = "Document",
+        ProcessName = "editor",
+        DisplayName = "Editor",
+        ExecutablePath = Environment.ProcessPath!
+    };
+
     private sealed class FailingSettingsStore : ISettingsStore
     {
         public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) =>
@@ -666,6 +755,27 @@ public sealed class ViewModelBehaviorTests
 
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
         {
+            LastSaved = settings;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FailFirstSettingsStore : ISettingsStore
+    {
+        private int _saveCalls;
+
+        public AppSettings? LastSaved { get; private set; }
+
+        public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AppSettings());
+
+        public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _saveCalls) == 1)
+            {
+                return Task.FromException(new IOException("Test write failure"));
+            }
+
             LastSaved = settings;
             return Task.CompletedTask;
         }
@@ -703,6 +813,14 @@ public sealed class ViewModelBehaviorTests
         }
     }
 
+    private sealed class ThrowingStartupRegistration : IStartupRegistration
+    {
+        public bool IsEnabledFor(string executablePath) => false;
+
+        public void SetEnabled(bool enabled, string executablePath) =>
+            throw new UnauthorizedAccessException("Test registry failure");
+    }
+
     private sealed class FakeVisibilityController : IWindowVisibilityController
     {
         public bool IsHidden { get; set; }
@@ -711,6 +829,7 @@ public sealed class ViewModelBehaviorTests
         public int UpdateCalls { get; private set; }
         public IReadOnlyCollection<TargetRule>? LastTargets { get; private set; }
         public bool FailFirstSelfCheck { get; init; }
+        public bool FailFirstUpdate { get; init; }
         public bool RestoreLeavesHidden { get; init; }
         public bool FailBlockedFirstRestore { get; init; }
         public VisibilityOperationResult SelfCheckResult { get; init; } = new();
@@ -760,6 +879,10 @@ public sealed class ViewModelBehaviorTests
         {
             UpdateCalls++;
             LastTargets = targets;
+            if (FailFirstUpdate && UpdateCalls == 1)
+            {
+                throw new IOException("Test target reconciliation failure");
+            }
             return Task.FromResult(new VisibilityOperationResult());
         }
 

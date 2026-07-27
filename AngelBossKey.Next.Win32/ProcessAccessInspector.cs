@@ -10,6 +10,11 @@ internal sealed class ProcessAccessInspector
 
     internal bool CannotSafelyAccess(int processId)
     {
+        if (!IsSameUserAndSession(processId))
+        {
+            return true;
+        }
+
         if (_currentProcessStatus == ElevationStatus.Elevated)
         {
             return false;
@@ -22,7 +27,8 @@ internal sealed class ProcessAccessInspector
     {
         try
         {
-            return Process.GetProcessById(processId).StartTime.ToUniversalTime().Ticks;
+            using var process = Process.GetProcessById(processId);
+            return process.StartTime.ToUniversalTime().Ticks;
         }
         catch
         {

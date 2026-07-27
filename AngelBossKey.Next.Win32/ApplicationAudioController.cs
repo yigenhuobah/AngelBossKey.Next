@@ -89,22 +89,16 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         try
         {
             _activeTargets = targets.Where(target => target.Enabled && target.MuteWhenHidden).ToArray();
+            Volatile.Write(ref _isActive, _activeTargets.Length > 0);
             try
             {
-                var removedIds = _savedSessions
-                    .Where(pair => !MatchesPath(pair.Value.ExecutablePath, _activeTargets))
-                    .Select(pair => pair.Key)
-                    .ToHashSet(StringComparer.Ordinal);
-                var attempt = RestoreSessions(removedIds);
-                foreach (var id in removedIds.Except(attempt.FailedSessionIds)) _savedSessions.Remove(id);
-                await SaveOrClearJournalAsync(cancellationToken);
+                await RestoreNoLongerTargetedSessionsAsync(cancellationToken);
                 await CaptureAndMuteAsync(cancellationToken);
             }
             catch (Exception exception)
             {
                 _log.LogError("audio.reconcile", exception);
             }
-            Volatile.Write(ref _isActive, _activeTargets.Length > 0);
             Volatile.Write(ref _pendingRestoreCount, _isActive ? 0 : _savedSessions.Count);
         }
         finally
@@ -186,12 +180,14 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         _disposed = true;
         _shutdown.Cancel();
         _timer.Dispose();
-        try { _monitorTask?.GetAwaiter().GetResult(); }
-        catch (OperationCanceledException) { }
-        try { RestoreAsync().GetAwaiter().GetResult(); }
-        catch (Exception exception) { _log.LogError("audio.dispose", exception); }
-        _shutdown.Dispose();
-        _gate.Dispose();
+        if (_monitorTask is null)
+        {
+            DisposeSynchronizationResources();
+        }
+        else
+        {
+            _ = DisposeAfterMonitorStopsAsync(_monitorTask);
+        }
         GC.SuppressFinalize(this);
     }
 
@@ -199,14 +195,15 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     {
         try
         {
-            while (await _timer.WaitForNextTickAsync(cancellationToken))
+            while (await _timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
-                await _gate.WaitAsync(cancellationToken);
+                await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
                     if (_activeTargets.Length > 0)
                     {
-                        await CaptureAndMuteAsync(cancellationToken);
+                        await RestoreNoLongerTargetedSessionsAsync(cancellationToken).ConfigureAwait(false);
+                        await CaptureAndMuteAsync(cancellationToken).ConfigureAwait(false);
                     }
                     else if (_savedSessions.Count > 0)
                     {
@@ -215,7 +212,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                         RetainOnly(attempt.FailedSessionIds);
                         if (_savedSessions.Count != before)
                         {
-                            await SaveOrClearJournalAsync(cancellationToken);
+                            await SaveOrClearJournalAsync(cancellationToken).ConfigureAwait(false);
                             Volatile.Write(ref _pendingRestoreCount, _savedSessions.Count);
                             _log.Info("audio.restore.retry", $"sessions={attempt.RestoredCount}; pending={_savedSessions.Count}");
                         }
@@ -240,14 +237,14 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     {
         if ((_activeTargets.Length > 0 || _savedSessions.Count > 0) && _monitorTask is null)
         {
-            _monitorTask = MonitorAsync(_shutdown.Token);
+            _monitorTask = Task.Run(() => MonitorAsync(_shutdown.Token));
         }
     }
 
     private async Task<int> CaptureAndMuteAsync(CancellationToken cancellationToken)
     {
         if (_activeTargets.Length == 0) return 0;
-        var captured = 0;
+        var captured = new List<AudioSessionSnapshot>();
         try
         {
             foreach (var session in _backend.Enumerate())
@@ -256,7 +253,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                     _savedSessions.ContainsKey(session.SessionId)) continue;
                 var processStartTime = ProcessAccessInspector.GetProcessStartTimeUtcTicks(session.ProcessId);
                 if (processStartTime <= 0) continue;
-                _savedSessions[session.SessionId] = new AudioSessionSnapshot
+                captured.Add(new AudioSessionSnapshot
                 {
                     SessionId = session.SessionId,
                     ProcessId = session.ProcessId,
@@ -264,10 +261,28 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                     ExecutablePath = session.ExecutablePath,
                     Volume = session.Volume,
                     Muted = session.Muted
-                };
-                captured++;
+                });
             }
-            if (captured > 0) await SaveOrClearJournalAsync(cancellationToken);
+            if (captured.Count > 0)
+            {
+                try
+                {
+                    foreach (var session in captured)
+                    {
+                        _savedSessions.Add(session.SessionId, session);
+                    }
+                    await SaveOrClearJournalAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    foreach (var session in captured)
+                    {
+                        _savedSessions.Remove(session.SessionId);
+                    }
+
+                    throw;
+                }
+            }
             return MuteRecordedMatchingSessions();
         }
         catch (Exception exception)
@@ -275,6 +290,35 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             _log.LogError("audio.enumerate", exception);
             return 0;
         }
+    }
+
+    private async Task<int> RestoreNoLongerTargetedSessionsAsync(CancellationToken cancellationToken)
+    {
+        var removedIds = _savedSessions
+            .Where(pair => !MatchesPath(pair.Value.ExecutablePath, _activeTargets))
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        if (removedIds.Count == 0) return 0;
+
+        var countBeforeRestore = _savedSessions.Count;
+        var attempt = RestoreSessions(removedIds);
+        foreach (var id in removedIds.Except(attempt.FailedSessionIds))
+        {
+            _savedSessions.Remove(id);
+        }
+
+        if (_savedSessions.Count != countBeforeRestore)
+        {
+            await SaveOrClearJournalAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        Volatile.Write(ref _pendingRestoreCount, _isActive ? 0 : _savedSessions.Count);
+        if (attempt.RestoredCount > 0)
+        {
+            _log.Info("audio.restore.rule-change", $"sessions={attempt.RestoredCount}; pending={attempt.FailedSessionIds.Count}");
+        }
+
+        return attempt.RestoredCount;
     }
 
     private int MuteRecordedMatchingSessions()
@@ -343,6 +387,28 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             {
                 Sessions = [.. _savedSessions.Values]
             }, cancellationToken);
+
+    private async Task DisposeAfterMonitorStopsAsync(Task monitorTask)
+    {
+        try
+        {
+            await monitorTask.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _log.LogError("audio.dispose.monitor", exception);
+        }
+        finally
+        {
+            DisposeSynchronizationResources();
+        }
+    }
+
+    private void DisposeSynchronizationResources()
+    {
+        _shutdown.Dispose();
+        _gate.Dispose();
+    }
 
     private static bool MatchesPath(string path, IReadOnlyCollection<TargetRule> targets) =>
         targets.Any(target => TargetRuleMatcher.MatchesPath(path, target));

@@ -23,7 +23,7 @@ public sealed class ElevatedWindowBrokerClient(
         {
             return new ElevatedWindowResponse
             {
-                FailedCount = request.Handles.Count + request.Windows.Count,
+                FailedCount = GetRequestedWindowCount(request),
                 Message = "提权 Broker 未启用，高权限窗口保持可见。"
             };
         }
@@ -54,7 +54,7 @@ public sealed class ElevatedWindowBrokerClient(
             _log.Warning("broker.start", $"cancelled-or-denied=true; code={exception.NativeErrorCode}");
             return new ElevatedWindowResponse
             {
-                FailedCount = request.Handles.Count + request.Windows.Count,
+                FailedCount = GetRequestedWindowCount(request),
                 Message = exception.NativeErrorCode == 1223
                     ? "用户取消了提权，高权限窗口保持可见。"
                     : $"无法启动提权 Broker：{exception.Message}"
@@ -63,7 +63,11 @@ public sealed class ElevatedWindowBrokerClient(
 
         if (process is null)
         {
-            return new ElevatedWindowResponse { FailedCount = 1, Message = "无法启动提权 Broker。" };
+            return new ElevatedWindowResponse
+            {
+                FailedCount = GetRequestedWindowCount(request),
+                Message = "无法启动提权 Broker。"
+            };
         }
 
         using (process)
@@ -82,21 +86,32 @@ public sealed class ElevatedWindowBrokerClient(
                     timeout.Token);
                 return response ?? new ElevatedWindowResponse
                 {
-                    FailedCount = 1,
+                    FailedCount = GetRequestedWindowCount(request),
                     Message = "提权 Broker 返回了无效响应。"
                 };
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return new ElevatedWindowResponse { FailedCount = 1, Message = "提权 Broker 响应超时。" };
+                return new ElevatedWindowResponse
+                {
+                    FailedCount = GetRequestedWindowCount(request),
+                    Message = "提权 Broker 响应超时。"
+                };
             }
             catch (Exception exception)
             {
                 _log.LogError("broker.request", exception);
-                return new ElevatedWindowResponse { FailedCount = 1, Message = $"提权 Broker 通信失败：{exception.Message}" };
+                return new ElevatedWindowResponse
+                {
+                    FailedCount = GetRequestedWindowCount(request),
+                    Message = $"提权 Broker 通信失败：{exception.Message}"
+                };
             }
         }
     }
+
+    private static int GetRequestedWindowCount(ElevatedWindowRequest request) =>
+        (request.Handles?.Count ?? 0) + (request.Windows?.Count ?? 0);
 
     internal sealed record BrokerEnvelope
     {

@@ -80,14 +80,6 @@ public sealed class JsonSettingsStore(string path) : ISettingsStore
         {
             return CreateDefaults();
         }
-        catch (IOException)
-        {
-            return CreateDefaults();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return CreateDefaults();
-        }
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)

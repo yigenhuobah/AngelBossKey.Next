@@ -6,6 +6,7 @@ using AngelBossKey.Next.Win32;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace AngelBossKey.Next.App.ViewModels;
 
@@ -25,6 +26,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SemaphoreSlim _hotkeyChangeGate = new(1, 1);
     private readonly SemaphoreSlim _ruleChangeGate = new(1, 1);
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private readonly HashSet<Guid> _registeredHotkeySceneIds = [];
     private Task _settingsSaveTail = Task.CompletedTask;
     private Task _ruleChangeTail = Task.CompletedTask;
     private AppSettings _settings;
@@ -36,6 +38,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _closeToTray;
     private bool _automationPaused;
     private bool _enableElevatedBroker;
+    private bool _hotkeyRegistrationsInitialized;
+    private int _operationStateRefreshQueued;
 
     public MainWindowViewModel(
         AppSettings settings,
@@ -134,8 +138,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public bool IsHidden => _visibilityController.IsHidden || _privacyDesktop.IsActive;
     public bool IsHotkeyConfigured => SelectedScene.Hotkey.IsConfigured;
+    private bool HasUsableHotkey => !_hotkeyRegistrationsInitialized ||
+        _registeredHotkeySceneIds.Contains(SelectedScene.Id);
     public bool CanToggle => !_isBusy &&
-        (IsHidden || (IsHotkeyConfigured &&
+        (IsHidden || (HasUsableHotkey &&
             (SelectedScene.Mode == SceneMode.PrivacyDesktop || Targets.Any(target => target.EffectiveEnabled))));
     public string HotkeyText => HotkeyFormatter.Format(SelectedScene.Hotkey);
     public string StatusTitle => _privacyDesktop.IsActive
@@ -163,15 +169,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         get => _launchAtLogin;
         set
         {
-            if (!SetProperty(ref _launchAtLogin, value)) return;
+            if (_launchAtLogin == value) return;
             try
             {
                 _startupRegistration.SetEnabled(value, Environment.ProcessPath!);
+                SetProperty(ref _launchAtLogin, value);
                 _settings = _settings with { LaunchAtLogin = value };
                 _ = SaveAndReportAsync();
             }
             catch (Exception exception)
             {
+                OnPropertyChanged(nameof(LaunchAtLogin));
                 Message = $"开机启动设置失败：{exception.Message}";
             }
         }
@@ -216,9 +224,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public async Task InitializeAsync()
     {
         var errors = new List<string>();
+        _hotkeyService.UnregisterAll();
+        _registeredHotkeySceneIds.Clear();
+        _hotkeyRegistrationsInitialized = true;
         foreach (var scene in Scenes.Where(scene => scene.Hotkey.IsConfigured))
         {
-            if (!_hotkeyService.TryRegister(scene.Id, scene.Hotkey, out var error))
+            if (_hotkeyService.TryRegister(scene.Id, scene.Hotkey, out var error))
+            {
+                _registeredHotkeySceneIds.Add(scene.Id);
+            }
+            else
             {
                 errors.Add($"{scene.Name}：{error}");
             }
@@ -257,6 +272,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 return false;
             }
 
+            _hotkeyRegistrationsInitialized = true;
+            _registeredHotkeySceneIds.Add(scene.Id);
             scene.Hotkey = gesture;
             try
             {
@@ -265,8 +282,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
             catch (Exception exception)
             {
                 scene.Hotkey = previous;
-                if (previous.IsConfigured) _hotkeyService.TryRegister(scene.Id, previous, out _);
-                else _hotkeyService.Unregister(scene.Id);
+                if (previous.IsConfigured &&
+                    _hotkeyService.TryRegister(scene.Id, previous, out _))
+                {
+                    _registeredHotkeySceneIds.Add(scene.Id);
+                }
+                else
+                {
+                    _hotkeyService.Unregister(scene.Id);
+                    _registeredHotkeySceneIds.Remove(scene.Id);
+                }
                 Message = $"保存热键失败，已恢复原设置：{exception.Message}";
                 return false;
             }
@@ -381,38 +406,80 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public async Task AddTargetsAsync(IEnumerable<WindowInfo> windows)
     {
-        var existing = Targets.Select(target => TargetRuleMatcher.NormalizePath(target.ExecutablePath))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var added = new List<TargetRowViewModel>();
-        foreach (var window in windows)
-        {
-            var path = TargetRuleMatcher.NormalizePath(window.ExecutablePath);
-            if (!existing.Add(path)) continue;
-            added.Add(AddTargetRow(new TargetRule { DisplayName = window.DisplayName, ExecutablePath = path }));
-        }
-
-        if (added.Count == 0) return;
+        ArgumentNullException.ThrowIfNull(windows);
+        await DrainRuleChangesAsync();
+        await _operationGate.WaitAsync();
+        await _ruleChangeGate.WaitAsync();
         try
         {
-            await PersistTargetsAsync();
-            if (_visibilityController.IsHidden)
+            var originalTargets = _selectedScene.Targets.ToArray();
+            var originalSettings = _settings;
+            var existing = Targets.Select(target => TargetRuleMatcher.NormalizePath(target.ExecutablePath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var added = new List<TargetRowViewModel>();
+            foreach (var window in windows)
             {
-                var rules = EffectiveTargets();
-                await _visibilityController.UpdateTargetsAsync(rules);
-                await _audioController.ReconcileAsync(rules);
+                var path = TargetRuleMatcher.NormalizePath(window.ExecutablePath);
+                if (!existing.Add(path)) continue;
+                added.Add(AddTargetRow(new TargetRule { DisplayName = window.DisplayName, ExecutablePath = path }));
             }
-            Message = $"已添加 {added.Count} 个目标程序。";
+
+            if (added.Count == 0) return;
+            try
+            {
+                await PersistTargetsAsync();
+                if (_visibilityController.IsHidden)
+                {
+                    var rules = EffectiveTargets();
+                    await _visibilityController.UpdateTargetsAsync(rules);
+                    await _audioController.ReconcileAsync(rules);
+                }
+                Message = $"已添加 {added.Count} 个目标程序。";
+            }
+            catch (Exception exception)
+            {
+                foreach (var row in added)
+                {
+                    row.PropertyChanged -= OnTargetPropertyChanged;
+                    Targets.Remove(row);
+                }
+
+                _selectedScene.SetTargets(originalTargets);
+                _settings = originalSettings;
+
+                if (_visibilityController.IsHidden)
+                {
+                    var rollbackRules = EffectiveTargets();
+                    try
+                    {
+                        await _visibilityController.UpdateTargetsAsync(rollbackRules);
+                        await _audioController.ReconcileAsync(rollbackRules);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        _diagnosticLog.LogError("targets.add.rollback-reconcile", rollbackException);
+                    }
+                }
+
+                try
+                {
+                    await QueueSettingsSaveAsync();
+                }
+                catch (Exception rollbackException)
+                {
+                    _diagnosticLog.LogError("targets.add.rollback-save", rollbackException);
+                }
+
+                _diagnosticLog.LogError("targets.add", exception);
+                Message = $"添加目标失败，已回滚更改：{exception.Message}";
+            }
         }
-        catch (Exception exception)
+        finally
         {
-            foreach (var row in added)
-            {
-                row.PropertyChanged -= OnTargetPropertyChanged;
-                Targets.Remove(row);
-            }
-            Message = $"添加目标失败，设置未保存：{exception.Message}";
+            _ruleChangeGate.Release();
+            _operationGate.Release();
+            RefreshAllState();
         }
-        RefreshAllState();
     }
 
     public async Task<VisibilityOperationResult> ToggleVisibilityAsync()
@@ -423,7 +490,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (_isBusy) return new VisibilityOperationResult();
             if (!IsHidden && !CanToggle)
             {
-                Message = !IsHotkeyConfigured ? "请先为当前场景设置热键。" : "没有可用的启用规则。";
+                Message = !IsHotkeyConfigured
+                    ? "请先为当前场景设置热键。"
+                    : !HasUsableHotkey
+                        ? "当前场景的热键未成功注册，无法隐藏。请更换热键后重试。"
+                        : "没有可用的启用规则。";
                 return new VisibilityOperationResult();
             }
 
@@ -656,6 +727,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             index = Scenes.IndexOf(removed);
             var replacement = Scenes[index == Scenes.Count - 1 ? index - 1 : index + 1];
             _hotkeyService.Unregister(removed.Id);
+            _registeredHotkeySceneIds.Remove(removed.Id);
             removed.PropertyChanged -= OnScenePropertyChanged;
             Scenes.Remove(removed);
             removalApplied = true;
@@ -680,7 +752,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 LoadSelectedTargets();
                 LoadSelectedLaunchItems();
                 TryConfigureAutomation(removed, "scene.remove.rollback");
-                if (removed.Hotkey.IsConfigured) _hotkeyService.TryRegister(removed.Id, removed.Hotkey, out _);
+                if (removed.Hotkey.IsConfigured &&
+                    _hotkeyService.TryRegister(removed.Id, removed.Hotkey, out _))
+                {
+                    _registeredHotkeySceneIds.Add(removed.Id);
+                }
+                else
+                {
+                    _registeredHotkeySceneIds.Remove(removed.Id);
+                }
                 UpdateSettingsSnapshot();
                 OnPropertyChanged(nameof(SelectedScene));
                 SceneMenuChanged?.Invoke(this, EventArgs.Empty);
@@ -734,8 +814,35 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void OnOperationStateChanged(object? sender, EventArgs e)
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess()) RefreshAllState();
-        else dispatcher.Invoke(RefreshAllState);
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            RefreshAllState();
+            return;
+        }
+
+        if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished ||
+            Interlocked.Exchange(ref _operationStateRefreshQueued, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = dispatcher.InvokeAsync(() =>
+            {
+                // Clear the coalescing flag before reading state. A change that
+                // races with this update can then schedule a follow-up refresh.
+                Volatile.Write(ref _operationStateRefreshQueued, 0);
+                if (!dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
+                {
+                    RefreshAllState();
+                }
+            }, DispatcherPriority.DataBind);
+        }
+        catch (InvalidOperationException)
+        {
+            Volatile.Write(ref _operationStateRefreshQueued, 0);
+        }
     }
 
     private void RefreshAllState()

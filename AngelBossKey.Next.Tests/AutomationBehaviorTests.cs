@@ -73,6 +73,24 @@ public sealed class AutomationBehaviorTests
     }
 
     [Fact]
+    public void ExplorerDesktopShell_ToolbarLossDoesNotSignalWorkspaceExit()
+    {
+        Assert.False(ExplorerDesktopShellHost.IsToolbarSatisfied(
+            showToolbar: true,
+            processRunning: true,
+            hasVisibleWindow: false));
+        Assert.False(ExplorerDesktopShellHost.ShouldSignalWorkspaceExit(
+            processRunning: true,
+            hasCompleteShell: true));
+        Assert.True(ExplorerDesktopShellHost.ShouldSignalWorkspaceExit(
+            processRunning: false,
+            hasCompleteShell: true));
+        Assert.True(ExplorerDesktopShellHost.ShouldSignalWorkspaceExit(
+            processRunning: true,
+            hasCompleteShell: false));
+    }
+
+    [Fact]
     public void ExplorerDesktopToolbar_DisabledPreferenceStopsWithoutStarting()
     {
         var ensureCalls = 0;

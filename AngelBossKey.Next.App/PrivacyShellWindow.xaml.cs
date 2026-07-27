@@ -26,6 +26,7 @@ public partial class PrivacyShellWindow : Window
         AddFavoriteLaunchers(WorkspaceLaunchCatalog.Load(sceneId).Items);
         _clockTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => UpdateClock(), Dispatcher);
         UpdateClock();
+        _clockTimer.Start();
     }
 
     protected override void OnSourceInitialized(EventArgs e)

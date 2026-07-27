@@ -5,6 +5,7 @@ namespace AngelBossKey.Next.Win32;
 
 internal static partial class NativeMethods
 {
+    internal const uint ProcessQueryInformation = 0x0400;
     internal const uint ProcessQueryLimitedInformation = 0x1000;
     internal const uint ProcessTerminate = 0x0001;
     internal const uint Synchronize = 0x00100000;
@@ -293,18 +294,18 @@ internal static partial class NativeMethods
         uint desiredAccess,
         nint securityAttributes);
 
-    [LibraryImport("user32.dll")]
+    [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetThreadDesktop(nint desktop);
 
-    [LibraryImport("user32.dll")]
+    [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SwitchDesktop(nint desktop);
 
     [LibraryImport("user32.dll")]
     internal static partial nint GetThreadDesktop(uint threadId);
 
-    [LibraryImport("user32.dll")]
+    [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool CloseDesktop(nint desktop);
 

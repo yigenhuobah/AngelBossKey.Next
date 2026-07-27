@@ -92,6 +92,63 @@ public sealed class WindowVisibilityIntegrationTests
     }
 
     [Fact]
+    public async Task WindowEventWatcher_ProcessesDifferentWindowsWithoutGlobalBacklogAndStopsAfterDispose()
+    {
+        var controller = new EventProbeVisibilityController();
+        using var watcher = new WindowEventWatcher(controller);
+
+        watcher.HandleWindowEvent(NativeMethods.EventObjectShow, EventProbeVisibilityController.BlockingShowHandle);
+        await controller.BlockingShowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        watcher.HandleWindowEvent(NativeMethods.EventObjectShow, EventProbeVisibilityController.SecondShowHandle);
+        await controller.SecondShowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        watcher.HandleWindowEvent(NativeMethods.EventObjectShow, EventProbeVisibilityController.BlockingShowHandle);
+        watcher.Dispose();
+        await controller.BlockingShowCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        watcher.HandleWindowEvent(NativeMethods.EventObjectShow, 303);
+        await Task.Yield();
+
+        Assert.Equal(1, controller.GetShowCallCount(EventProbeVisibilityController.BlockingShowHandle));
+        Assert.Equal(1, controller.GetShowCallCount(EventProbeVisibilityController.SecondShowHandle));
+        Assert.Equal(0, controller.GetShowCallCount(303));
+    }
+
+    [Fact]
+    public async Task WindowEventWatcher_PreservesShowAfterDestroyForTheSameHandle()
+    {
+        var controller = new EventProbeVisibilityController();
+        using var watcher = new WindowEventWatcher(controller);
+
+        watcher.HandleWindowEvent(NativeMethods.EventObjectDestroy, EventProbeVisibilityController.ReusedHandle);
+        await controller.DestroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        watcher.HandleWindowEvent(NativeMethods.EventObjectShow, EventProbeVisibilityController.ReusedHandle);
+        controller.ReleaseDestroy();
+        await controller.ReusedHandleShowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(["destroy", "show"], controller.GetReusedHandleOperations());
+    }
+
+    [Fact]
+    public async Task WindowEventWatcher_CoalescesDuplicateDestroyEvents()
+    {
+        var controller = new EventProbeVisibilityController();
+        using var watcher = new WindowEventWatcher(controller);
+
+        watcher.HandleWindowEvent(NativeMethods.EventObjectDestroy, EventProbeVisibilityController.ReusedHandle);
+        await controller.DestroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        watcher.HandleWindowEvent(NativeMethods.EventObjectDestroy, EventProbeVisibilityController.ReusedHandle);
+        controller.ReleaseDestroy();
+        await controller.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        watcher.HandleWindowEvent(NativeMethods.EventObjectShow, EventProbeVisibilityController.ReusedHandle);
+        await controller.ReusedHandleShowStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, controller.GetDestroyCallCount());
+        Assert.False(controller.SecondDestroyStarted.Task.IsCompleted);
+    }
+
+    [Fact]
     public async Task Controller_HidesAndRestoresAResponsiveTopLevelWindow()
     {
         using var testWindow = await TestWindowHost.StartAsync();
@@ -242,6 +299,104 @@ public sealed class WindowVisibilityIntegrationTests
             Assert.Equal(1, restored.ChangedCount);
             Assert.True(NativeMethods.IsWindowVisible((nint)window.Handle));
             Assert.False(File.Exists(journalPath));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Controller_RestoreShowSuppression_CoalescesEventsUntilExpiry()
+    {
+        using var restoredHost = await TestWindowHost.StartAsync("Suppressed restore window");
+        using var pendingHost = await TestWindowHost.StartAsync("Pending restore window");
+        using var process = Process.GetCurrentProcess();
+        var restoredWindow = CreateWindow(restoredHost, process, "Suppressed restore window");
+        var pendingWindow = CreateWindow(pendingHost, process, "Pending restore window");
+        var directory = Path.Combine(Path.GetTempPath(), "AngelBossKey.Next.Tests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var actions = new RestoreSuppressionWindowActions(pendingWindow.Handle);
+            var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
+            var controller = new WindowVisibilityController(
+                new MultipleWindowCatalog([restoredWindow, pendingWindow]),
+                new JsonRecoveryStore(Path.Combine(directory, "recovery.json")),
+                nativeActions: actions,
+                timeProvider: clock);
+            var target = new TargetRule
+            {
+                DisplayName = "Test host",
+                ExecutablePath = Environment.ProcessPath!
+            };
+
+            var hidden = await controller.HideAsync([target]);
+            Assert.Equal(2, hidden.ChangedCount);
+
+            actions.MakeRestoreWaitFailForPendingWindow();
+            var restored = await controller.RestoreAsync();
+            Assert.Equal(1, restored.ChangedCount);
+            Assert.Equal(1, restored.FailedCount);
+            Assert.True(controller.IsHidden);
+            Assert.True(NativeMethods.IsWindowVisible((nint)restoredWindow.Handle));
+
+            var hideRequestsBeforeEvents = actions.GetHideRequestCount(restoredWindow.Handle);
+            Assert.False(await controller.TryHideNewWindowAsync(restoredWindow.Handle));
+            Assert.False(await controller.TryHideNewWindowAsync(restoredWindow.Handle));
+            Assert.Equal(hideRequestsBeforeEvents, actions.GetHideRequestCount(restoredWindow.Handle));
+
+            clock.Advance(TimeSpan.FromSeconds(2));
+
+            Assert.True(await controller.TryHideNewWindowAsync(restoredWindow.Handle));
+            Assert.Equal(hideRequestsBeforeEvents + 1, actions.GetHideRequestCount(restoredWindow.Handle));
+            Assert.True(SpinWait.SpinUntil(
+                () => !NativeMethods.IsWindowVisible((nint)restoredWindow.Handle),
+                TimeSpan.FromSeconds(3)));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Controller_RestoreShowSuppression_DropsStaleWindowIdentity()
+    {
+        using var restoredHost = await TestWindowHost.StartAsync("Stale identity restore window");
+        using var pendingHost = await TestWindowHost.StartAsync("Pending identity restore window");
+        using var process = Process.GetCurrentProcess();
+        var restoredWindow = CreateWindow(restoredHost, process, "Stale identity restore window");
+        var pendingWindow = CreateWindow(pendingHost, process, "Pending identity restore window");
+        var directory = Path.Combine(Path.GetTempPath(), "AngelBossKey.Next.Tests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var actions = new RestoreSuppressionWindowActions(pendingWindow.Handle);
+            var controller = new WindowVisibilityController(
+                new MultipleWindowCatalog([restoredWindow, pendingWindow]),
+                new JsonRecoveryStore(Path.Combine(directory, "recovery.json")),
+                nativeActions: actions,
+                timeProvider: new MutableTimeProvider(DateTimeOffset.UtcNow));
+            var target = new TargetRule
+            {
+                DisplayName = "Test host",
+                ExecutablePath = Environment.ProcessPath!
+            };
+
+            Assert.Equal(2, (await controller.HideAsync([target])).ChangedCount);
+            actions.MakeRestoreWaitFailForPendingWindow();
+            Assert.Equal(1, (await controller.RestoreAsync()).ChangedCount);
+            Assert.True(controller.IsHidden);
+
+            var hideRequestsBeforeEvent = actions.GetHideRequestCount(restoredWindow.Handle);
+            actions.InvalidateNextIdentityCheck(restoredWindow.Handle);
+
+            Assert.True(await controller.TryHideNewWindowAsync(restoredWindow.Handle));
+            Assert.Equal(hideRequestsBeforeEvent + 1, actions.GetHideRequestCount(restoredWindow.Handle));
+            Assert.True(SpinWait.SpinUntil(
+                () => !NativeMethods.IsWindowVisible((nint)restoredWindow.Handle),
+                TimeSpan.FromSeconds(3)));
         }
         finally
         {
@@ -466,6 +621,243 @@ public sealed class WindowVisibilityIntegrationTests
                 _ = NativeMethods.ShowWindowAsync((nint)handle, command);
             });
         }
+    }
+
+    private sealed class RestoreSuppressionWindowActions(long pendingWindowHandle) : IWindowNativeActions
+    {
+        private readonly object _sync = new();
+        private readonly Dictionary<long, int> _hideRequestCounts = [];
+        private bool _makePendingWindowAppearInvisible;
+        private long? _invalidatedHandle;
+
+        public bool Exists(long handle)
+        {
+            lock (_sync)
+            {
+                if (_invalidatedHandle == handle)
+                {
+                    _invalidatedHandle = null;
+                    return false;
+                }
+            }
+
+            return NativeMethods.IsWindow((nint)handle);
+        }
+
+        public bool IsVisible(long handle)
+        {
+            lock (_sync)
+            {
+                if (_makePendingWindowAppearInvisible && handle == pendingWindowHandle)
+                {
+                    return false;
+                }
+            }
+
+            return NativeMethods.IsWindowVisible((nint)handle);
+        }
+
+        public void RequestShow(long handle, int command)
+        {
+            if (command == NativeMethods.SwHide)
+            {
+                lock (_sync)
+                {
+                    _hideRequestCounts.TryGetValue(handle, out var count);
+                    _hideRequestCounts[handle] = count + 1;
+                }
+            }
+
+            _ = NativeMethods.ShowWindowAsync((nint)handle, command);
+        }
+
+        public void MakeRestoreWaitFailForPendingWindow()
+        {
+            lock (_sync)
+            {
+                _makePendingWindowAppearInvisible = true;
+            }
+        }
+
+        public void InvalidateNextIdentityCheck(long handle)
+        {
+            lock (_sync)
+            {
+                _invalidatedHandle = handle;
+            }
+        }
+
+        public int GetHideRequestCount(long handle)
+        {
+            lock (_sync)
+            {
+                return _hideRequestCounts.TryGetValue(handle, out var count) ? count : 0;
+            }
+        }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private readonly object _sync = new();
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_sync)
+            {
+                return _utcNow;
+            }
+        }
+
+        public void Advance(TimeSpan duration)
+        {
+            lock (_sync)
+            {
+                _utcNow += duration;
+            }
+        }
+    }
+
+    private sealed class EventProbeVisibilityController : IWindowVisibilityController
+    {
+        public const long BlockingShowHandle = 101;
+        public const long SecondShowHandle = 202;
+        public const long ReusedHandle = 404;
+
+        private readonly object _sync = new();
+        private readonly Dictionary<long, int> _showCalls = [];
+        private readonly List<string> _reusedHandleOperations = [];
+        private readonly TaskCompletionSource _releaseBlockingShow =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseDestroy =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _destroyCalls;
+
+        public TaskCompletionSource BlockingShowStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource BlockingShowCancelled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondShowStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource DestroyStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource DestroyCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondDestroyStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReusedHandleShowStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool IsHidden => false;
+        public event EventHandler? StateChanged { add { } remove { } }
+
+        public Task<VisibilityOperationResult> HideAsync(
+            IReadOnlyCollection<TargetRule> targets,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VisibilityOperationResult());
+
+        public Task<VisibilityOperationResult> RestoreAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VisibilityOperationResult());
+
+        public Task<VisibilityOperationResult> RecoverAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VisibilityOperationResult());
+
+        public Task<VisibilityOperationResult> UpdateTargetsAsync(
+            IReadOnlyCollection<TargetRule> targets,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VisibilityOperationResult());
+
+        public Task<VisibilityOperationResult> SelfCheckAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new VisibilityOperationResult());
+
+        public async Task<bool> TryHideNewWindowAsync(long handle, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                _showCalls.TryGetValue(handle, out var count);
+                _showCalls[handle] = count + 1;
+                if (handle == ReusedHandle)
+                {
+                    _reusedHandleOperations.Add("show");
+                }
+            }
+
+            if (handle == BlockingShowHandle)
+            {
+                BlockingShowStarted.TrySetResult();
+                try
+                {
+                    await _releaseBlockingShow.Task.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    BlockingShowCancelled.TrySetResult();
+                    throw;
+                }
+            }
+            else if (handle == SecondShowHandle)
+            {
+                SecondShowStarted.TrySetResult();
+            }
+            else if (handle == ReusedHandle)
+            {
+                ReusedHandleShowStarted.TrySetResult();
+            }
+
+            return true;
+        }
+
+        public async Task ForgetDestroyedWindowAsync(long handle, CancellationToken cancellationToken = default)
+        {
+            if (handle != ReusedHandle)
+            {
+                return;
+            }
+
+            int destroyCall;
+            lock (_sync)
+            {
+                _reusedHandleOperations.Add("destroy");
+                destroyCall = ++_destroyCalls;
+            }
+
+            if (destroyCall > 1)
+            {
+                SecondDestroyStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return;
+            }
+
+            DestroyStarted.TrySetResult();
+            await _releaseDestroy.Task.WaitAsync(cancellationToken);
+            DestroyCompleted.TrySetResult();
+        }
+
+        public int GetShowCallCount(long handle)
+        {
+            lock (_sync)
+            {
+                return _showCalls.TryGetValue(handle, out var count) ? count : 0;
+            }
+        }
+
+        public IReadOnlyList<string> GetReusedHandleOperations()
+        {
+            lock (_sync)
+            {
+                return [.. _reusedHandleOperations];
+            }
+        }
+
+        public int GetDestroyCallCount()
+        {
+            lock (_sync)
+            {
+                return _destroyCalls;
+            }
+        }
+
+        public void ReleaseDestroy() => _releaseDestroy.TrySetResult();
     }
 
     private sealed class TestWindowHost : IDisposable

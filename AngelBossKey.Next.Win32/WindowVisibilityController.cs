@@ -9,14 +9,17 @@ public sealed partial class WindowVisibilityController(
     IRecoveryStore recoveryStore,
     IDiagnosticLog? diagnosticLog = null,
     IElevatedWindowBroker? elevatedBroker = null,
-    IWindowNativeActions? nativeActions = null) : IWindowVisibilityController
+    IWindowNativeActions? nativeActions = null,
+    TimeProvider? timeProvider = null) : IWindowVisibilityController
 {
+    private static readonly TimeSpan RestoreShowSuppressionDuration = TimeSpan.FromSeconds(2);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ProcessAccessInspector _accessInspector = new();
     private readonly List<HiddenWindowRecord> _hiddenWindows = [];
-    private readonly HashSet<long> _restoreShowSuppressions = [];
+    private readonly Dictionary<long, RestoreShowSuppression> _restoreShowSuppressions = [];
     private readonly IDiagnosticLog _log = diagnosticLog ?? NullDiagnosticLog.Instance;
     private readonly IWindowNativeActions _nativeActions = nativeActions ?? new WindowNativeActions();
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private TargetRule[] _activeTargets = [];
     private bool _isHidden;
 
@@ -115,7 +118,7 @@ public sealed partial class WindowVisibilityController(
             var confirmedHidden = 0;
             foreach (var record in actionRecords)
             {
-                if (!await WaitForVisibilityAsync((nint)record.Handle, visible: false, cancellationToken))
+                if (!await WaitForVisibilityAsync(record, visible: false, cancellationToken))
                 {
                     if (!record.RequiresElevatedBroker)
                     {
@@ -328,7 +331,7 @@ public sealed partial class WindowVisibilityController(
                 {
                     _nativeActions.RequestShow(record.Handle, NativeMethods.SwHide);
                 }
-                if (await WaitForVisibilityAsync(window, visible: false, cancellationToken))
+                if (await WaitForVisibilityAsync(record, visible: false, cancellationToken))
                 {
                     corrected++;
                 }
@@ -374,7 +377,7 @@ public sealed partial class WindowVisibilityController(
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (_restoreShowSuppressions.Remove(handle))
+            if (IsRestoreShowSuppressed(handle))
             {
                 return false;
             }
@@ -396,7 +399,7 @@ public sealed partial class WindowVisibilityController(
                     }
 
                     _nativeActions.RequestShow(handle, NativeMethods.SwHide);
-                    return await WaitForVisibilityAsync((nint)handle, visible: false, cancellationToken);
+                    return await WaitForVisibilityAsync(existing, visible: false, cancellationToken);
                 }
 
                 if (identity == WindowIdentityStatus.Unknown)
@@ -445,7 +448,7 @@ public sealed partial class WindowVisibilityController(
             {
                 _nativeActions.RequestShow(record.Handle, NativeMethods.SwHide);
             }
-            if (await WaitForVisibilityAsync((nint)record.Handle, visible: false, cancellationToken))
+            if (await WaitForVisibilityAsync(record, visible: false, cancellationToken))
             {
                 return true;
             }
@@ -570,7 +573,7 @@ public sealed partial class WindowVisibilityController(
 
         foreach (var record in actionRecords)
         {
-            if (await WaitForVisibilityAsync((nint)record.Handle, visible: false, cancellationToken))
+            if (await WaitForVisibilityAsync(record, visible: false, cancellationToken))
             {
                 confirmed++;
             }
@@ -625,27 +628,63 @@ public sealed partial class WindowVisibilityController(
 
         if (brokerRecords.Count > 0)
         {
-            var response = await ExecuteBrokerAsync(
-                ElevatedWindowCommand.Restore,
-                brokerRecords,
-                cancellationToken);
             foreach (var record in brokerRecords)
             {
-                var window = (nint)record.Handle;
-                _restoreShowSuppressions.Add(record.Handle);
-                if (await WaitForVisibilityAsync(window, visible: true, cancellationToken))
+                AddRestoreShowSuppression(record);
+            }
+
+            ElevatedWindowResponse response;
+            try
+            {
+                response = await ExecuteBrokerAsync(
+                    ElevatedWindowCommand.Restore,
+                    brokerRecords,
+                    cancellationToken);
+            }
+            catch
+            {
+                foreach (var record in brokerRecords)
+                {
+                    RemoveRestoreShowSuppression(record);
+                }
+
+                throw;
+            }
+
+            foreach (var record in brokerRecords)
+            {
+                var identity = GetWindowIdentity(record, (nint)record.Handle);
+                if (identity == WindowIdentityStatus.Different)
+                {
+                    RemoveRestoreShowSuppression(record);
+                    continue;
+                }
+
+                if (identity == WindowIdentityStatus.Unknown)
+                {
+                    RemoveRestoreShowSuppression(record);
+                    failed++;
+                    remaining.Add(record);
+                    continue;
+                }
+
+                if (await WaitForVisibilityAsync(record, visible: true, cancellationToken))
                 {
                     changed++;
                     if (record.WasForeground)
                     {
-                        foregroundWindow = window;
+                        foregroundWindow = (nint)record.Handle;
                     }
                 }
                 else
                 {
+                    var stillValid = GetWindowIdentity(record, (nint)record.Handle) != WindowIdentityStatus.Different;
                     failed++;
-                    remaining.Add(record);
-                    _restoreShowSuppressions.Remove(record.Handle);
+                    RemoveRestoreShowSuppression(record);
+                    if (stillValid)
+                    {
+                        remaining.Add(record);
+                    }
                 }
             }
             if (response.FailedCount > 0)
@@ -681,19 +720,31 @@ public sealed partial class WindowVisibilityController(
                 continue;
             }
 
-            _restoreShowSuppressions.Add(record.Handle);
+            var preActionIdentity = GetWindowIdentity(record, window);
+            if (preActionIdentity == WindowIdentityStatus.Different)
+            {
+                continue;
+            }
+            if (preActionIdentity == WindowIdentityStatus.Unknown)
+            {
+                failed++;
+                remaining.Add(record);
+                continue;
+            }
+
+            AddRestoreShowSuppression(record);
             if (!NativeMethods.SetWindowPlacement(window, in placement))
             {
-                _restoreShowSuppressions.Remove(record.Handle);
+                RemoveRestoreShowSuppression(record);
                 failed++;
                 remaining.Add(record);
                 continue;
             }
 
             _nativeActions.RequestShow(record.Handle, (int)placement.ShowCmd);
-            if (!await WaitForVisibilityAsync(window, visible: true, cancellationToken))
+            if (!await WaitForVisibilityAsync(record, visible: true, cancellationToken))
             {
-                _restoreShowSuppressions.Remove(record.Handle);
+                RemoveRestoreShowSuppression(record);
                 failed++;
                 if (GetWindowIdentity(record, window) != WindowIdentityStatus.Different)
                 {

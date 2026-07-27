@@ -12,13 +12,19 @@ internal static class AtomicJsonStore
 
     public static async Task<T?> ReadAsync<T>(string path, CancellationToken cancellationToken)
     {
-        if (!File.Exists(path))
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            return await JsonSerializer.DeserializeAsync<T>(stream, Options, cancellationToken);
+        }
+        catch (FileNotFoundException)
         {
             return default;
         }
-
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<T>(stream, Options, cancellationToken);
+        catch (DirectoryNotFoundException)
+        {
+            return default;
+        }
     }
 
     public static async Task WriteAsync<T>(string path, T value, CancellationToken cancellationToken)
