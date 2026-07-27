@@ -221,6 +221,14 @@ dotnet publish .\AngelBossKey.Next.App\AngelBossKey.Next.App.csproj -p:PublishPr
 
 它会依次执行依赖还原、`dotnet format` 校验、启用 SDK `Recommended` Roslyn analyzers 的 Release 构建，以及完整测试。所有编译和 analyzer 告警都会按错误处理。需要自动修复格式时运行 `.\eng\quality.ps1 -Fix`；依赖已经还原时可追加 `-SkipRestore`。追加 `-Coverage` 会生成 Cobertura 覆盖率报告并打印行覆盖率与分支覆盖率，报告保存在被 Git 忽略的 `artifacts\coverage-*` 目录。
 
+窗口与音频恢复逻辑另有确定性故障压力入口：
+
+```powershell
+.\eng\reliability.ps1
+```
+
+它会放大音频会话、规则变更、恢复日志写入失败、异常重启、PID 复用和合成测试窗口的隐藏/恢复序列；失败结果和可复现 seed 写入 `artifacts\reliability`。普通质量门使用较小样本，每周及手动 GitHub Actions 使用较大样本。模型、不变量、参数和复现方法见[可靠性测试说明](docs/reliability-testing.md)。这仍不能替代 Explorer、DPI、多显示器、托盘和独立桌面的真实环境验收。
+
 计划公开仓库前，请先阅读 [贡献指南](CONTRIBUTING.md)、[安全策略](SECURITY.md)、[发布清单](RELEASING.md)、[发布验收指引](docs/release-validation.md) 和 [变更日志](CHANGELOG.md)。本项目采用 [MIT License](LICENSE)。
 
 便携构建默认输出到 `dist\AngelBossKey.Next-v<版本>-win-x64`，其中版本只在 `Directory.Build.props` 中维护。运行 `AngelBossKey.Next.exe` 即可，无需安装。自包含包固定携带稳定版 .NET 10.0.10 运行时。

@@ -14,6 +14,9 @@ public sealed record ProcessAudioSession
 public sealed record AudioSessionUpdate
 {
     public required string SessionId { get; init; }
+    public required int ProcessId { get; init; }
+    public required long ProcessStartTimeUtcTicks { get; init; }
+    public required string ExecutablePath { get; init; }
     public float? Volume { get; init; }
     public bool Muted { get; init; }
 }
@@ -48,9 +51,13 @@ public sealed class NAudioSessionBackend : IAudioSessionBackend
     {
         var byId = updates.ToDictionary(update => update.SessionId, StringComparer.Ordinal);
         var failed = byId.Keys.ToHashSet(StringComparer.Ordinal);
-        VisitSessions((session, sessionId, _, _) =>
+        VisitSessions((session, sessionId, processId, path) =>
         {
             if (!byId.TryGetValue(sessionId, out var update)) return;
+            if (update.ProcessId != processId ||
+                update.ProcessStartTimeUtcTicks <= 0 ||
+                update.ProcessStartTimeUtcTicks != ProcessAccessInspector.GetProcessStartTimeUtcTicks(processId) ||
+                !string.Equals(update.ExecutablePath, path, StringComparison.OrdinalIgnoreCase)) return;
             try
             {
                 var volume = session.SimpleAudioVolume;

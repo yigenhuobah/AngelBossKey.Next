@@ -11,6 +11,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     private readonly IDiagnosticLog _log;
     private readonly IAudioRecoveryStore _recoveryStore;
     private readonly IAudioSessionBackend _backend;
+    private readonly Func<int, long> _getProcessStartTimeUtcTicks;
     private readonly PeriodicTimer _timer;
     private readonly CancellationTokenSource _shutdown = new();
     private TargetRule[] _activeTargets = [];
@@ -36,10 +37,27 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         IAudioRecoveryStore recoveryStore,
         IDiagnosticLog? diagnosticLog = null,
         TimeSpan? monitorInterval = null)
+        : this(
+            backend,
+            recoveryStore,
+            diagnosticLog,
+            monitorInterval,
+            ProcessAccessInspector.GetProcessStartTimeUtcTicks)
+    {
+    }
+
+    internal ApplicationAudioController(
+        IAudioSessionBackend backend,
+        IAudioRecoveryStore recoveryStore,
+        IDiagnosticLog? diagnosticLog,
+        TimeSpan? monitorInterval,
+        Func<int, long> getProcessStartTimeUtcTicks)
     {
         _backend = backend;
         _recoveryStore = recoveryStore;
         _log = diagnosticLog ?? NullDiagnosticLog.Instance;
+        _getProcessStartTimeUtcTicks = getProcessStartTimeUtcTicks ??
+            throw new ArgumentNullException(nameof(getProcessStartTimeUtcTicks));
         _timer = new PeriodicTimer(monitorInterval ?? TimeSpan.FromSeconds(1));
     }
 
@@ -245,14 +263,19 @@ public sealed class ApplicationAudioController : IApplicationAudioController
     {
         if (_activeTargets.Length == 0) return 0;
         var captured = new List<AudioSessionSnapshot>();
+        var replaced = new Dictionary<string, AudioSessionSnapshot>(StringComparer.Ordinal);
         try
         {
             foreach (var session in _backend.Enumerate())
             {
-                if (!MatchesPath(session.ExecutablePath, _activeTargets) ||
-                    _savedSessions.ContainsKey(session.SessionId)) continue;
-                var processStartTime = ProcessAccessInspector.GetProcessStartTimeUtcTicks(session.ProcessId);
+                if (!MatchesPath(session.ExecutablePath, _activeTargets)) continue;
+                var processStartTime = _getProcessStartTimeUtcTicks(session.ProcessId);
                 if (processStartTime <= 0) continue;
+                if (_savedSessions.TryGetValue(session.SessionId, out var saved))
+                {
+                    if (HasSameIdentity(saved, session, processStartTime)) continue;
+                    replaced[session.SessionId] = saved;
+                }
                 captured.Add(new AudioSessionSnapshot
                 {
                     SessionId = session.SessionId,
@@ -269,7 +292,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                 {
                     foreach (var session in captured)
                     {
-                        _savedSessions.Add(session.SessionId, session);
+                        _savedSessions[session.SessionId] = session;
                     }
                     await SaveOrClearJournalAsync(cancellationToken).ConfigureAwait(false);
                 }
@@ -277,7 +300,14 @@ public sealed class ApplicationAudioController : IApplicationAudioController
                 {
                     foreach (var session in captured)
                     {
-                        _savedSessions.Remove(session.SessionId);
+                        if (replaced.TryGetValue(session.SessionId, out var previous))
+                        {
+                            _savedSessions[session.SessionId] = previous;
+                        }
+                        else
+                        {
+                            _savedSessions.Remove(session.SessionId);
+                        }
                     }
 
                     throw;
@@ -323,17 +353,25 @@ public sealed class ApplicationAudioController : IApplicationAudioController
 
     private int MuteRecordedMatchingSessions()
     {
-        var updates = _backend.Enumerate()
-            .Where(session => !session.Muted && _savedSessions.ContainsKey(session.SessionId) &&
-                MatchesPath(session.ExecutablePath, _activeTargets))
-            .Select(session => new AudioSessionUpdate
+        var updates = new List<AudioSessionUpdate>();
+        foreach (var session in _backend.Enumerate())
+        {
+            if (session.Muted ||
+                !MatchesPath(session.ExecutablePath, _activeTargets) ||
+                !_savedSessions.TryGetValue(session.SessionId, out var saved)) continue;
+            var processStartTimeUtcTicks = _getProcessStartTimeUtcTicks(session.ProcessId);
+            if (!HasSameIdentity(saved, session, processStartTimeUtcTicks)) continue;
+            updates.Add(new AudioSessionUpdate
             {
                 SessionId = session.SessionId,
+                ProcessId = saved.ProcessId,
+                ProcessStartTimeUtcTicks = saved.ProcessStartTimeUtcTicks,
+                ExecutablePath = saved.ExecutablePath,
                 Muted = true
-            })
-            .ToArray();
+            });
+        }
         var failed = _backend.Apply(updates);
-        return updates.Length - failed.Count;
+        return updates.Count - failed.Count;
     }
 
     private RestoreAttempt RestoreSessions(HashSet<string> sessionIds)
@@ -345,11 +383,14 @@ public sealed class ApplicationAudioController : IApplicationAudioController
             if (!sessionIds.Contains(session.SessionId) ||
                 !_savedSessions.TryGetValue(session.SessionId, out var saved) ||
                 saved.ProcessId != session.ProcessId ||
-                saved.ProcessStartTimeUtcTicks != ProcessAccessInspector.GetProcessStartTimeUtcTicks(session.ProcessId) ||
+                saved.ProcessStartTimeUtcTicks != _getProcessStartTimeUtcTicks(session.ProcessId) ||
                 !string.Equals(saved.ExecutablePath, session.ExecutablePath, StringComparison.OrdinalIgnoreCase)) continue;
             updates.Add(new AudioSessionUpdate
             {
                 SessionId = session.SessionId,
+                ProcessId = saved.ProcessId,
+                ProcessStartTimeUtcTicks = saved.ProcessStartTimeUtcTicks,
+                ExecutablePath = saved.ExecutablePath,
                 Volume = saved.Volume,
                 Muted = saved.Muted
             });
@@ -363,7 +404,7 @@ public sealed class ApplicationAudioController : IApplicationAudioController
         foreach (var sessionId in pending.ToArray())
         {
             if (!_savedSessions.TryGetValue(sessionId, out var saved) ||
-                ProcessAccessInspector.GetProcessStartTimeUtcTicks(saved.ProcessId) !=
+                _getProcessStartTimeUtcTicks(saved.ProcessId) !=
                     saved.ProcessStartTimeUtcTicks)
             {
                 pending.Remove(sessionId);
@@ -412,6 +453,14 @@ public sealed class ApplicationAudioController : IApplicationAudioController
 
     private static bool MatchesPath(string path, IReadOnlyCollection<TargetRule> targets) =>
         targets.Any(target => TargetRuleMatcher.MatchesPath(path, target));
+
+    private static bool HasSameIdentity(
+        AudioSessionSnapshot saved,
+        ProcessAudioSession current,
+        long processStartTimeUtcTicks) =>
+        saved.ProcessId == current.ProcessId &&
+        saved.ProcessStartTimeUtcTicks == processStartTimeUtcTicks &&
+        string.Equals(saved.ExecutablePath, current.ExecutablePath, StringComparison.OrdinalIgnoreCase);
 
     private sealed record RestoreAttempt(int RestoredCount, HashSet<string> FailedSessionIds);
 

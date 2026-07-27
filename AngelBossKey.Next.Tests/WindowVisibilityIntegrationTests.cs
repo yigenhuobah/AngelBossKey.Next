@@ -149,6 +149,7 @@ public sealed class WindowVisibilityIntegrationTests
     }
 
     [Fact]
+    [Trait("Category", "Reliability")]
     public async Task Controller_HidesAndRestoresAResponsiveTopLevelWindow()
     {
         using var testWindow = await TestWindowHost.StartAsync();
@@ -200,7 +201,7 @@ public sealed class WindowVisibilityIntegrationTests
             Assert.False(controller.IsHidden);
             Assert.False(File.Exists(Path.Combine(directory, "recovery.json")));
 
-            for (var cycle = 1; cycle < 100; cycle++)
+            for (var cycle = 1; cycle < ReliabilityTestSettings.WindowVisibilityCycles; cycle++)
             {
                 hideResult = await controller.HideAsync(targets);
                 restoreResult = await controller.RestoreAsync();
