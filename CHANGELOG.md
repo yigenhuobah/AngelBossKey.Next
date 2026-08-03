@@ -4,6 +4,12 @@ All notable changes to AngelBossKey Next are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Independent-desktop entry no longer preemptively rejects full-screen or
+  exclusive-mode foreground windows; it attempts the Windows desktop switch
+  and reports or falls back only when the actual operation fails.
+
 ## [0.9.0-preview.1]
 
 ### Changed

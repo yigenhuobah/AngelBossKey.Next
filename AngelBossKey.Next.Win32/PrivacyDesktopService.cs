@@ -65,12 +65,6 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             return (true, "已位于独立隐私桌面。使用 Ctrl+Alt+Shift+F12 紧急返回。");
         }
 
-        var compatibility = CheckCompatibility();
-        if (compatibility is not null)
-        {
-            return (false, compatibility);
-        }
-
         DesktopContext context;
         try
         {
@@ -114,6 +108,8 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
             return (false, $"独立桌面初始化失败：{exception.Message}");
         }
 
+        // Full-screen and exclusive-mode applications are advisory compatibility
+        // risks, not a reason to block the emergency action before trying it.
         if (context.Desktop == 0 || !NativeMethods.SwitchDesktop(context.Desktop))
         {
             _log.Warning("desktop.switch", $"failed=true; error={Marshal.GetLastWin32Error()}");
@@ -455,30 +451,4 @@ public sealed class PrivacyDesktopService : IPrivacyDesktopService
         _log.Info(eventName, "success=true");
     }
 
-    private static string? CheckCompatibility()
-    {
-        var foreground = NativeMethods.GetForegroundWindow();
-        if (foreground == 0 || !NativeMethods.GetWindowRect(foreground, out var windowRect))
-        {
-            return null;
-        }
-
-        var monitor = NativeMethods.MonitorFromWindow(foreground, NativeMethods.MonitorDefaultToNearest);
-        var info = new NativeMethods.MonitorInfo
-        {
-            Size = (uint)Marshal.SizeOf<NativeMethods.MonitorInfo>()
-        };
-        if (monitor == 0 || !NativeMethods.GetMonitorInfoW(monitor, ref info))
-        {
-            return null;
-        }
-
-        var isFullscreen = windowRect.Left <= info.Monitor.Left &&
-            windowRect.Top <= info.Monitor.Top &&
-            windowRect.Right >= info.Monitor.Right &&
-            windowRect.Bottom >= info.Monitor.Bottom;
-        return isFullscreen
-            ? "检测到独占或全屏前台窗口。为避免游戏/视频切换异常，本次未进入独立桌面。"
-            : null;
-    }
 }
