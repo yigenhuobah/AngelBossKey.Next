@@ -27,8 +27,9 @@ just to complete release validation.
 3. Open another target window while hidden and confirm it also restores.
 4. Toggle a rule off while hidden, then restore. Confirm only windows still
    covered by enabled rules are restored.
-5. Enable the optional per-application mute rule, verify the target session is
-   muted while hidden, then verify its prior volume and mute state returns.
+5. Enable the optional per-application mute rule. Verify the target session is
+   muted during normal hiding and after entering each independent-desktop mode,
+   then verify its prior volume and mute state returns in both modes.
 6. Close the main window, reopen it from the tray, then explicitly exit from
    the tray. Confirm all managed windows are restored before the process exits.
 7. With only test applications hidden, end the process and relaunch it. Confirm
@@ -50,8 +51,9 @@ independent-desktop behavior.
 4. Test an administrator window with on-demand elevation disabled and enabled;
    the disabled case must remain visible and report a clear failure.
 5. Enter and return from both independent-desktop modes. Confirm the emergency
-   return hotkey works and the complete Explorer mode falls back safely when it
-   cannot establish a shell.
+   return hotkey works, configured audio sessions mute without changing system
+   volume, the emergency/Shell return paths restore each session, and the
+   complete Explorer mode falls back safely when it cannot establish a shell.
 
 ## Reporting a result
 
