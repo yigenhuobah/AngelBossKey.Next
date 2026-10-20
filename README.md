@@ -209,7 +209,7 @@ GitHub-hosted runner 只验证构建、单元测试、静态扫描和发布产�
 
 ```powershell
 dotnet build .\AngelBossKey.Next.slnx -c Release
-dotnet test .\AngelBossKey.Next.Tests\AngelBossKey.Next.Tests.csproj -c Release
+dotnet test --project .\AngelBossKey.Next.Tests\AngelBossKey.Next.Tests.csproj -c Release
 dotnet publish .\AngelBossKey.Next.App\AngelBossKey.Next.App.csproj -p:PublishProfile=Portable
 ```
 
