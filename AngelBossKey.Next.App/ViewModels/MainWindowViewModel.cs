@@ -40,6 +40,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _enableElevatedBroker;
     private bool _hotkeyRegistrationsInitialized;
     private int _operationStateRefreshQueued;
+    private int _privacyReturnInProgress;
+    private int _privacyAudioRestoreQueued;
 
     public MainWindowViewModel(
         AppSettings settings,
@@ -428,10 +430,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             try
             {
                 await PersistTargetsAsync();
-                if (_visibilityController.IsHidden)
+                if (IsHidden)
                 {
                     var rules = EffectiveTargets();
-                    await _visibilityController.UpdateTargetsAsync(rules);
+                    if (_visibilityController.IsHidden)
+                    {
+                        await _visibilityController.UpdateTargetsAsync(rules);
+                    }
                     await _audioController.ReconcileAsync(rules);
                 }
                 Message = $"已添加 {added.Count} 个目标程序。";
@@ -447,12 +452,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 _selectedScene.SetTargets(originalTargets);
                 _settings = originalSettings;
 
-                if (_visibilityController.IsHidden)
+                if (IsHidden)
                 {
                     var rollbackRules = EffectiveTargets();
                     try
                     {
-                        await _visibilityController.UpdateTargetsAsync(rollbackRules);
+                        if (_visibilityController.IsHidden)
+                        {
+                            await _visibilityController.UpdateTargetsAsync(rollbackRules);
+                        }
                         await _audioController.ReconcileAsync(rollbackRules);
                     }
                     catch (Exception rollbackException)
@@ -522,8 +530,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 });
                 if (desktopResult.Success)
                 {
-                    Message = desktopResult.Message;
-                    return new VisibilityOperationResult { ChangedCount = 1, Detail = desktopResult.Message };
+                    var detail = desktopResult.Message;
+                    var audioTargets = EffectiveTargets();
+                    if (audioTargets.Any(target => target.Enabled && target.MuteWhenHidden))
+                    {
+                        try
+                        {
+                            var mutedSessions = await _audioController.MuteAsync(audioTargets);
+                            if (mutedSessions > 0)
+                            {
+                                detail = $"{detail} 已静音 {mutedSessions} 个音频会话。";
+                            }
+                        }
+                        catch (Exception exception)
+                        {
+                            _diagnosticLog.LogError("audio.privacy-entry", exception);
+                            detail = $"{detail} 音频静音暂未完成，已记录诊断信息并将在后台重试。";
+                        }
+                    }
+                    Message = detail;
+                    return new VisibilityOperationResult { ChangedCount = 1, Detail = detail };
                 }
 
                 var fallbackRules = EffectiveTargets();
@@ -617,16 +643,27 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshAllState();
         if (targetChanged)
         {
-            QueueRuleChanges(_visibilityController.IsHidden ? "程序路径状态已更新，规则已重新应用。" : null);
+            QueueRuleChanges(IsHidden ? "程序路径状态已更新，规则已重新应用。" : null);
         }
     }
 
     private async Task<VisibilityOperationResult> RestoreCurrentCoreAsync()
     {
         var total = new VisibilityOperationResult();
+        var privacyReturnSucceeded = true;
         if (_privacyDesktop.IsActive)
         {
-            var desktop = await _privacyDesktop.ReturnAsync();
+            Volatile.Write(ref _privacyReturnInProgress, 1);
+            (bool Success, string Message) desktop;
+            try
+            {
+                desktop = await _privacyDesktop.ReturnAsync();
+            }
+            finally
+            {
+                Volatile.Write(ref _privacyReturnInProgress, 0);
+            }
+            privacyReturnSucceeded = desktop.Success;
             total = total with { ChangedCount = desktop.Success ? 1 : 0, FailedCount = desktop.Success ? 0 : 1, Detail = desktop.Message };
         }
         if (_visibilityController.IsHidden)
@@ -639,7 +676,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 SkippedElevatedCount = windows.SkippedElevatedCount
             };
         }
-        await _audioController.RestoreAsync();
+        if (privacyReturnSucceeded)
+        {
+            await _audioController.RestoreAsync();
+        }
         if (_audioController.PendingRestoreCount > 0)
         {
             total = total with
@@ -813,6 +853,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void OnOperationStateChanged(object? sender, EventArgs e)
     {
+        if (ReferenceEquals(sender, _privacyDesktop) &&
+            !_privacyDesktop.IsActive &&
+            Volatile.Read(ref _privacyReturnInProgress) == 0 &&
+            Interlocked.Exchange(ref _privacyAudioRestoreQueued, 1) == 0)
+        {
+            QueuePrivacyAudioRestore();
+        }
+
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.CheckAccess())
         {
@@ -842,6 +890,73 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch (InvalidOperationException)
         {
             Volatile.Write(ref _operationStateRefreshQueued, 0);
+        }
+    }
+
+    private void QueuePrivacyAudioRestore()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            _ = RestoreAudioAfterPrivacyReturnAsync();
+            return;
+        }
+
+        try
+        {
+            _ = dispatcher.InvokeAsync(
+                RestoreAudioAfterPrivacyReturnAsync,
+                DispatcherPriority.DataBind).Task.Unwrap();
+        }
+        catch (InvalidOperationException)
+        {
+            Volatile.Write(ref _privacyAudioRestoreQueued, 0);
+        }
+    }
+
+    private async Task RestoreAudioAfterPrivacyReturnAsync()
+    {
+        try
+        {
+            await _operationGate.WaitAsync();
+            try
+            {
+                if (_privacyDesktop.IsActive ||
+                    Volatile.Read(ref _privacyReturnInProgress) != 0 ||
+                    (!_audioController.IsActive && _audioController.PendingRestoreCount == 0))
+                {
+                    return;
+                }
+
+                await _audioController.RestoreAsync();
+                if (_audioController.PendingRestoreCount > 0)
+                {
+                    Message = $"已返回原桌面；{_audioController.PendingRestoreCount} 个音频会话将在后台继续恢复。";
+                }
+                else
+                {
+                    Message = "已返回原桌面，音频已恢复。";
+                }
+
+                if (!_privacyDesktop.IsActive && !_visibilityController.IsHidden)
+                {
+                    _operationSceneId = null;
+                }
+            }
+            finally
+            {
+                _operationGate.Release();
+            }
+        }
+        catch (Exception exception)
+        {
+            _diagnosticLog.LogError("audio.privacy-return", exception);
+            Message = "已返回原桌面，但音频恢复失败，将在后台继续重试。";
+        }
+        finally
+        {
+            Volatile.Write(ref _privacyAudioRestoreQueued, 0);
+            RefreshAllState();
         }
     }
 

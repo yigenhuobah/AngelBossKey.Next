@@ -548,12 +548,14 @@ public sealed class ViewModelBehaviorTests
         };
         var controller = new FakeVisibilityController();
         var privacyDesktop = new FailingPrivacyDesktopService();
+        var audio = new FakeAudioController();
         var viewModel = new MainWindowViewModel(
             new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
             new MemorySettingsStore(),
             controller,
             new FakeStartupRegistration(),
             new GlobalHotkeyService(),
+            audioController: audio,
             privacyDesktop: privacyDesktop);
 
         var result = await viewModel.ToggleVisibilityAsync();
@@ -565,6 +567,160 @@ public sealed class ViewModelBehaviorTests
         Assert.Equal(scene.Id, privacyDesktop.LastRequest?.SceneId);
         Assert.False(privacyDesktop.LastRequest!.ShowToolbar);
         Assert.Single(privacyDesktop.LastRequest!.LaunchItems);
+        Assert.Equal(1, audio.MuteCalls);
+    }
+
+    [Fact]
+    public async Task PrivacyDesktopEntry_MutesConfiguredTargets()
+    {
+        var scene = CreatePrivacyScene(muteWhenHidden: true);
+        var controller = new FakeVisibilityController();
+        var privacyDesktop = new TestPrivacyDesktopService();
+        var audio = new FakeAudioController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
+            new MemorySettingsStore(),
+            controller,
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio,
+            privacyDesktop: privacyDesktop);
+
+        var result = await viewModel.ToggleVisibilityAsync();
+
+        Assert.Equal(1, result.ChangedCount);
+        Assert.True(privacyDesktop.IsActive);
+        Assert.Equal(0, controller.HideCalls);
+        Assert.Equal(1, audio.MuteCalls);
+        Assert.True(Assert.Single(audio.LastMuteTargets!).MuteWhenHidden);
+    }
+
+    [Fact]
+    public async Task PrivacyDesktopEntry_WithoutMuteRulesDoesNotTouchAudio()
+    {
+        var scene = CreatePrivacyScene(muteWhenHidden: false);
+        var audio = new FakeAudioController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio,
+            privacyDesktop: new TestPrivacyDesktopService());
+
+        await viewModel.ToggleVisibilityAsync();
+
+        Assert.Equal(0, audio.MuteCalls);
+    }
+
+    [Fact]
+    public async Task PrivacyDesktopEntry_WithDisabledMuteRuleDoesNotTouchAudio()
+    {
+        var scene = CreatePrivacyScene(muteWhenHidden: true, enabled: false);
+        var audio = new FakeAudioController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings { Scenes = [scene], ActiveSceneId = scene.Id },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio,
+            privacyDesktop: new TestPrivacyDesktopService());
+
+        await viewModel.ToggleVisibilityAsync();
+
+        Assert.Equal(0, audio.MuteCalls);
+    }
+
+    [Fact]
+    public async Task PrivacyDesktopExternalReturn_RestoresAudio()
+    {
+        var privacyDesktop = new TestPrivacyDesktopService();
+        var audio = new FakeAudioController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings
+            {
+                Scenes = [CreatePrivacyScene(muteWhenHidden: true)]
+            },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio,
+            privacyDesktop: privacyDesktop);
+
+        await viewModel.ToggleVisibilityAsync();
+        Assert.True(audio.IsActive);
+
+        privacyDesktop.SimulateExternalReturn();
+
+        Assert.True(SpinWait.SpinUntil(() => audio.RestoreCalls == 1, TimeSpan.FromSeconds(3)));
+        Assert.False(viewModel.IsHidden);
+    }
+
+    [Fact]
+    public void PrivacyDesktopRuleChanges_ReconcileAudioWithoutUpdatingWindows()
+    {
+        var audio = new FakeAudioController();
+        var privacyDesktop = new TestPrivacyDesktopService { IsActive = true };
+        var controller = new FakeVisibilityController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings
+            {
+                Scenes =
+                [
+                    CreatePrivacyScene(muteWhenHidden: true)
+                ]
+            },
+            new MemorySettingsStore(),
+            controller,
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio,
+            privacyDesktop: privacyDesktop);
+
+        viewModel.Targets[0].MuteWhenHidden = false;
+
+        Assert.True(SpinWait.SpinUntil(() => audio.ReconcileCalls > 0, TimeSpan.FromSeconds(3)));
+        Assert.Equal(0, controller.UpdateCalls);
+        Assert.False(Assert.Single(audio.LastReconcileTargets!).MuteWhenHidden);
+    }
+
+    [Fact]
+    public async Task PrivacyDesktopReturnFailure_KeepsAudioMutedUntilReturnSucceeds()
+    {
+        var privacyDesktop = new TestPrivacyDesktopService
+        {
+            IsActive = true,
+            ReturnSucceeds = false
+        };
+        var audio = new FakeAudioController();
+        var viewModel = new MainWindowViewModel(
+            new AppSettings
+            {
+                Scenes =
+                [
+                    CreatePrivacyScene(muteWhenHidden: true)
+                ]
+            },
+            new MemorySettingsStore(),
+            new FakeVisibilityController(),
+            new FakeStartupRegistration(),
+            new GlobalHotkeyService(),
+            audioController: audio,
+            privacyDesktop: privacyDesktop);
+
+        await viewModel.ToggleVisibilityAsync();
+
+        Assert.True(privacyDesktop.IsActive);
+        Assert.Equal(0, audio.RestoreCalls);
+
+        privacyDesktop.ReturnSucceeds = true;
+        await viewModel.ToggleVisibilityAsync();
+
+        Assert.False(privacyDesktop.IsActive);
+        Assert.Equal(1, audio.RestoreCalls);
     }
 
     [Fact]
@@ -725,6 +881,22 @@ public sealed class ViewModelBehaviorTests
                 DisplayName = name,
                 ExecutablePath = Environment.ProcessPath!
             }).ToList()
+    };
+
+    private static SceneProfile CreatePrivacyScene(bool muteWhenHidden, bool enabled = true) => new()
+    {
+        Name = "Privacy",
+        Mode = SceneMode.PrivacyDesktop,
+        Targets =
+        [
+            new TargetRule
+            {
+                DisplayName = "Editor",
+                ExecutablePath = Environment.ProcessPath!,
+                Enabled = enabled,
+                MuteWhenHidden = muteWhenHidden
+            }
+        ]
     };
 
     private static WindowInfo CreateWindowInfo() => new()
@@ -914,10 +1086,14 @@ public sealed class ViewModelBehaviorTests
         public int PendingRestoreCount => 0;
         public int MuteCalls { get; private set; }
         public int RestoreCalls { get; private set; }
+        public int ReconcileCalls { get; private set; }
+        public IReadOnlyCollection<TargetRule>? LastMuteTargets { get; private set; }
+        public IReadOnlyCollection<TargetRule>? LastReconcileTargets { get; private set; }
         public Task<int> MuteAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default)
         {
             MuteCalls++;
-            return Task.FromResult(0);
+            LastMuteTargets = targets.ToArray();
+            return Task.FromResult(targets.Count(target => target.MuteWhenHidden));
         }
         public Task<int> RestoreAsync(CancellationToken cancellationToken = default)
         {
@@ -925,8 +1101,61 @@ public sealed class ViewModelBehaviorTests
             return Task.FromResult(0);
         }
         public Task<int> RecoverAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
-        public Task ReconcileAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task ReconcileAsync(IReadOnlyCollection<TargetRule> targets, CancellationToken cancellationToken = default)
+        {
+            ReconcileCalls++;
+            LastReconcileTargets = targets.ToArray();
+            return Task.CompletedTask;
+        }
+        public void Dispose() { }
+    }
+
+    private sealed class TestPrivacyDesktopService : IPrivacyDesktopService
+    {
+        public bool IsActive { get; set; }
+        public bool ReturnSucceeds { get; set; } = true;
+        public bool HasWorkspace => false;
+        public int RunningApplicationCount => 0;
+        public PrivacyDesktopShellMode? ActiveShellMode => null;
+        public event EventHandler? StateChanged;
+
+        public Task<(bool Success, string Message)> EnterAsync(
+            PrivacyDesktopLaunchRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            IsActive = true;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return Task.FromResult((true, "已进入独立桌面。"));
+        }
+
+        public Task<(bool Success, string Message)> ReturnAsync(
+            CancellationToken cancellationToken = default)
+        {
+            if (!ReturnSucceeds)
+            {
+                return Task.FromResult((false, "返回原桌面失败。"));
+            }
+
+            IsActive = false;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return Task.FromResult((true, "已返回原桌面。"));
+        }
+
+        public void SimulateExternalReturn()
+        {
+            if (!IsActive) return;
+            IsActive = false;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public Task<(bool Success, string Message)> CloseWorkspaceAsync(
+            CancellationToken cancellationToken = default)
+        {
+            IsActive = false;
+            return Task.FromResult((true, "独立工作区已关闭。"));
+        }
+
+        public IReadOnlyList<WorkspaceProcessInfo> GetRunningApplications() => [];
         public void Dispose() { }
     }
 

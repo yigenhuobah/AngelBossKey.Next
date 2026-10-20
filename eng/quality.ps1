@@ -43,13 +43,19 @@ try {
         $coverageRoot = Join-Path $repositoryRoot (
             'artifacts\coverage-' + [guid]::NewGuid().ToString('N')
         )
+        $coverageFile = Join-Path $coverageRoot 'coverage.cobertura.xml'
         Invoke-DotNet @(
-            'test', $solution, '-c', 'Release', '--no-build', '--no-restore',
-            '--collect:XPlat Code Coverage', '--results-directory', $coverageRoot
+            'test', '--solution', $solution, '-c', 'Release', '--no-build', '--no-restore',
+            '--results-directory', $coverageRoot,
+            '--', '--coverage', '--coverage-output-format', 'cobertura',
+            '--coverage-output', $coverageFile
         )
 
-        $report = Get-ChildItem $coverageRoot -Recurse -Filter 'coverage.cobertura.xml' |
-            Select-Object -First 1
+        $report = Get-Item -LiteralPath $coverageFile -ErrorAction SilentlyContinue
+        if ($null -eq $report) {
+            $report = Get-ChildItem $coverageRoot -Recurse -Filter '*.cobertura.xml' |
+                Select-Object -First 1
+        }
         if ($null -eq $report) {
             throw 'The coverage collector did not produce a Cobertura report.'
         }
@@ -63,7 +69,9 @@ try {
         )
     }
     else {
-        Invoke-DotNet @('test', $solution, '-c', 'Release', '--no-build', '--no-restore')
+        Invoke-DotNet @(
+            'test', '--solution', $solution, '-c', 'Release', '--no-build', '--no-restore'
+        )
     }
 
     Write-Host 'Quality checks passed.' -ForegroundColor Green

@@ -9,6 +9,9 @@ All notable changes to AngelBossKey Next are documented in this file.
 - Independent-desktop entry no longer preemptively rejects full-screen or
   exclusive-mode foreground windows; it attempts the Windows desktop switch
   and reports or falls back only when the actual operation fails.
+- Independent-desktop scenes now apply their existing per-application mute rules
+  after entry, restore audio on emergency or Shell-triggered returns, and keep
+  audio muted when returning to the original desktop fails.
 
 ## [0.9.0-preview.1]
 

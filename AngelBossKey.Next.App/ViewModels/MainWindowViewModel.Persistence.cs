@@ -55,11 +55,15 @@ public sealed partial class MainWindowViewModel
         try
         {
             await PersistTargetsAsync();
-            if (_visibilityController.IsHidden &&
+            if (IsHidden &&
                 (_operationSceneId is null || _operationSceneId == SelectedScene.Id))
             {
                 var rules = EffectiveTargets();
-                var result = await _visibilityController.UpdateTargetsAsync(rules);
+                VisibilityOperationResult result = new();
+                if (_visibilityController.IsHidden)
+                {
+                    result = await _visibilityController.UpdateTargetsAsync(rules);
+                }
                 await _audioController.ReconcileAsync(rules);
                 if (result.ChangedCount > 0 || result.FailedCount > 0)
                 {
